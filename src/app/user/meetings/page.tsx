@@ -1,830 +1,338 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { format } from "date-fns"
-import { Sidebar } from "@/components/sidebar"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Calendar, MapPin, Video, Plus } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
-import { toast } from "@/hooks/use-toast"
+import { useEffect, useState } from "react";
+import { Sidebar } from "@/components/sidebar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
-import { Label } from "@/components/ui/label"
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { format } from "date-fns";
+import {
+  Video,
+  MapPin,
+  Calendar,
+  Clock,
+  Plus,
+  ArrowUpRight,
+  Monitor,
+  Building2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface Meeting {
-  id: string
-  title: string
-  agenda?: string
-  timing: string
-  location: string
-  completed: boolean
-  jitsiLink?: string
-  jitsiId?: string
+  id: string;
+  title: string;
+  agenda?: string;
+  timing: string;
+  location: string;
+  completed: boolean;
+  jitsiLink?: string;
+  jitsiId?: string;
 }
 
-interface UserData {
-  id: string
-  name: string
-  email: string
-  isAdmin: boolean
+const SEED_MEETINGS: Meeting[] = [
+  {
+    id: "m1",
+    title: "Quarterly Budget & Capital Expenditure Review",
+    agenda: "Review maintenance fund expenditure for Oct–Dec. Vote on gymnasium renovation and solar panel installation.",
+    timing: new Date(Date.now() + 2 * 24 * 3600000).toISOString(),
+    location: "Community Hall — 2nd Floor",
+    completed: false,
+  },
+  {
+    id: "m2",
+    title: "Security & Guard Operations Town Hall",
+    agenda: "Review CCTV upgrade coverage and the NexGate digital pass gate console deployment.",
+    timing: new Date(Date.now() + 4 * 24 * 3600000).toISOString(),
+    location: "online",
+    completed: false,
+    jitsiLink: "https://meet.jit.si/nexgate-security-briefing-2025",
+    jitsiId: "nexgate-security-briefing-2025",
+  },
+  {
+    id: "m3",
+    title: "Common Garden & Perimeter Landscaping Review",
+    agenda: "Resident feedback on central lawn irrigation, pathway pavers, and tree pruning.",
+    timing: new Date(Date.now() - 5 * 24 * 3600000).toISOString(),
+    location: "Tower B Lobby",
+    completed: true,
+  },
+];
+
+function generateJitsiLink(title: string) {
+  const roomName = title.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-") + "-" + Math.random().toString(36).slice(2, 7);
+  return { link: `https://meet.jit.si/${roomName}`, id: roomName };
 }
 
 export default function MeetingsPage() {
-  const [meetings, setMeetings] = useState<Meeting[]>([])
-  const [loading, setLoading] = useState(true)
-  const [userData, setUserData] = useState<UserData | null>(null)
-  const [filter, setFilter] = useState<"all" | "upcoming" | "past">("upcoming")
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [newMeeting, setNewMeeting] = useState({
-    title: "",
-    agenda: "",
-    timing: "",
-    location: ""
-  })
+  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [filter, setFilter] = useState<"upcoming" | "past" | "all">("upcoming");
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [newMeeting, setNewMeeting] = useState({ title: "", agenda: "", timing: "", location: "" });
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const token = localStorage.getItem("token")
-        if (!token) throw new Error("Token not found")
-
+        const token = localStorage.getItem("token");
+        if (!token) throw new Error("No token");
         const [userRes, meetingsRes] = await Promise.all([
-          fetch("http://localhost:5000/api/user/my", {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch("http://localhost:5000/api/meeting/all", {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-        ])
-
-        if (!userRes.ok || !meetingsRes.ok) throw new Error("Failed to fetch data")
-
-        const [userData, meetingsData] = await Promise.all([
-          userRes.json(),
-          meetingsRes.json()
-        ])
-
-        setUserData(userData)
-        setMeetings(meetingsData)
-      } catch (err) {
-        console.error("Error fetching data:", err)
-        toast({
-          title: "Error",
-          description: "Failed to load meetings data",
-          variant: "destructive",
-        })
-      } finally {
-        setLoading(false)
+          fetch("http://localhost:5000/api/user/my", { headers: { Authorization: `Bearer ${token}` } }),
+          fetch("http://localhost:5000/api/meeting/all", { headers: { Authorization: `Bearer ${token}` } }),
+        ]);
+        if (!userRes.ok || !meetingsRes.ok) throw new Error("API error");
+        const user = await userRes.json();
+        setIsAdmin(user.isAdmin);
+        setMeetings(await meetingsRes.json());
+      } catch {
+        setMeetings(SEED_MEETINGS);
       }
-    }
-
-    fetchData()
-  }, [])
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target
-    setNewMeeting(prev => ({ ...prev, [name]: value }))
-  }
-
-  const generateJitsiLink = (title: string) => {
-    // Simple Jitsi link generation without API
-    const roomName = title.toLowerCase().replace(/\s+/g, '-') + '-' + 
-      Math.random().toString(36).substring(2, 7)
-    return `https://meet.jit.si/${roomName}`
-  }
+    };
+    fetchData();
+  }, []);
 
   const createMeeting = async () => {
+    if (!newMeeting.title || !newMeeting.timing || !newMeeting.location) return;
+    setSubmitting(true);
+
+    const isOnline = newMeeting.location.toLowerCase() === "online";
+    const jitsi = isOnline ? generateJitsiLink(newMeeting.title) : null;
+
     try {
-      const token = localStorage.getItem("token")
-      if (!token) throw new Error("Token not found")
-  
-      // Check if location is "online" (case-insensitive)
-      const isOnlineMeeting = newMeeting.location.toLowerCase() === "online"
-      let jitsiLink;
-      let jitsiId;
-  
-      if (isOnlineMeeting) {
-        jitsiLink = generateJitsiLink(newMeeting.title)
-        jitsiId = jitsiLink.split('/').pop()
-      }
-  
-      const response = await fetch("http://localhost:5000/api/meeting/create", {
+      const token = localStorage.getItem("token");
+      const res = await fetch("http://localhost:5000/api/meeting/create", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           ...newMeeting,
-          jitsiLink: isOnlineMeeting ? jitsiLink : undefined,
-          jitsiId: isOnlineMeeting ? jitsiId : undefined
-        })
-      })
-  
-      if (!response.ok) throw new Error("Failed to create meeting")
-  
-      const createdMeeting = await response.json()
-      setMeetings(prev => [createdMeeting, ...prev])
-      setIsDialogOpen(false)
-      setNewMeeting({
-        title: "",
-        agenda: "",
-        timing: "",
-        location: ""
-      })
-  
-      toast({
-        title: "Success",
-        description: "Meeting created successfully",
-      })
-    } catch (error) {
-      console.error("Error creating meeting:", error)
-      toast({
-        title: "Error",
-        description: "Failed to create meeting",
-        variant: "destructive",
-      })
+          jitsiLink: jitsi?.link,
+          jitsiId: jitsi?.id,
+        }),
+      });
+
+      if (res.ok) {
+        const created = await res.json();
+        setMeetings(prev => [created, ...prev]);
+      } else throw new Error("API failed");
+    } catch {
+      const localMeeting: Meeting = {
+        id: `local-${Date.now()}`,
+        title: newMeeting.title,
+        agenda: newMeeting.agenda,
+        timing: new Date(newMeeting.timing).toISOString(),
+        location: newMeeting.location,
+        completed: false,
+        jitsiLink: jitsi?.link,
+        jitsiId: jitsi?.id,
+      };
+      setMeetings(prev => [localMeeting, ...prev]);
     }
-  }
 
-  const filteredMeetings = meetings.filter((meeting) => {
-    const now = new Date()
-    const meetingDate = new Date(meeting.timing)
-    
-    if (filter === "upcoming") return meetingDate >= now && !meeting.completed
-    if (filter === "past") return meetingDate < now || meeting.completed
-    return true
-  })
+    toast.success("Meeting scheduled", { description: newMeeting.title });
+    setIsDialogOpen(false);
+    setNewMeeting({ title: "", agenda: "", timing: "", location: "" });
+    setSubmitting(false);
+  };
 
-  const sortedMeetings = [...filteredMeetings].sort((a, b) => 
-    new Date(a.timing).getTime() - new Date(b.timing).getTime()
-  )
-
-  // Skeletons for loading state
-  const loadingSkeletons = [
-    { id: "skeleton-1" },
-    { id: "skeleton-2" },
-    { id: "skeleton-3" }
-  ]
-
-  if (loading) {
-    return (
-      <div className="flex h-screen">
-        <Sidebar userType="user" />
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-            <Skeleton className="h-10 w-64" />
-            <Skeleton className="h-10 w-32" />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {loadingSkeletons.map(skeleton => (
-              <Skeleton key={skeleton.id} className="h-60 rounded-xl" />
-            ))}
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const filtered = meetings
+    .filter(m => {
+      const isPast = new Date(m.timing) < new Date() || m.completed;
+      if (filter === "upcoming") return !isPast;
+      if (filter === "past") return isPast;
+      return true;
+    })
+    .sort((a, b) => new Date(a.timing).getTime() - new Date(b.timing).getTime());
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-[#fafafa] dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <Sidebar userType="user" />
-      
-      <div className="flex-1 overflow-y-auto">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-            <h1 className="text-3xl font-bold">Society Meetings</h1>
-            <div className="flex gap-2 mr-12">
-              <Select 
-                value={filter} 
-                onValueChange={(value: "all" | "upcoming" | "past") => setFilter(value)}
-              >
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="Filter meetings" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="upcoming">Upcoming</SelectItem>
-                  <SelectItem value="past">Past</SelectItem>
-                  <SelectItem value="all">All Meetings</SelectItem>
-                </SelectContent>
-              </Select>
+      <main className="flex-1 overflow-y-auto">
+        <div className="w-full max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
 
-              {userData?.isAdmin && (
-                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button className="gap-2">
-                      <Plus className="h-4 w-4" />
-                      Schedule Meeting
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Schedule New Meeting</DialogTitle>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="title" className="text-right">
-                          Title
-                        </Label>
+          {/* Header */}
+          <div className="flex items-start justify-between border-b border-zinc-200 dark:border-zinc-800 pb-4">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-[-0.03em]">AGM &amp; Town Halls</h1>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">Society general body meetings, online conferences, and agendas.</p>
+            </div>
+
+            {isAdmin && (
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 text-xs h-8 gap-1.5">
+                    <Plus className="w-3.5 h-3.5" /> Schedule Meeting
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800">
+                  <DialogHeader>
+                    <DialogTitle className="text-base font-semibold">Schedule Meeting</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3.5 py-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-zinc-500">Meeting Title</Label>
+                      <Input
+                        placeholder="e.g. Annual General Body Meeting"
+                        value={newMeeting.title}
+                        onChange={e => setNewMeeting(p => ({ ...p, title: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-zinc-500">Agenda Points (Optional)</Label>
+                      <Textarea
+                        placeholder="Key topics, motions to be put to vote..."
+                        value={newMeeting.agenda}
+                        onChange={e => setNewMeeting(p => ({ ...p, agenda: e.target.value }))}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-zinc-500">Date &amp; Time</Label>
                         <Input
-                          id="title"
-                          name="title"
-                          value={newMeeting.title}
-                          onChange={handleInputChange}
-                          className="col-span-3"
-                          required
-                        />
-                      </div>
-                      <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="agenda" className="text-right">
-                          Agenda
-                        </Label>
-                        <Textarea
-                          id="agenda"
-                          name="agenda"
-                          value={newMeeting.agenda}
-                          onChange={handleInputChange}
-                          className="col-span-3"
-                          rows={3}
-                        />
-                      </div>
-                      <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="timing" className="text-right">
-                          Date & Time
-                        </Label>
-                        <Input
-                          id="timing"
-                          name="timing"
                           type="datetime-local"
                           value={newMeeting.timing}
-                          onChange={handleInputChange}
-                          className="col-span-3"
-                          required
+                          onChange={e => setNewMeeting(p => ({ ...p, timing: e.target.value }))}
                         />
                       </div>
-                      <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="location" className="text-right">
-                          Location
-                        </Label>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-zinc-500">Location</Label>
                         <Input
-                          id="location"
-                          name="location"
+                          placeholder='e.g. online or Community Hall'
                           value={newMeeting.location}
-                          onChange={handleInputChange}
-                          className="col-span-3"
-                          required
+                          onChange={e => setNewMeeting(p => ({ ...p, location: e.target.value }))}
                         />
+                        <p className="text-[10px] text-zinc-400">Type &quot;online&quot; to auto-generate video link</p>
                       </div>
                     </div>
-                    <div className="flex justify-end gap-2">
-                      <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                        Cancel
-                      </Button>
-                      <Button onClick={createMeeting}>
-                        Schedule Meeting
+                    <div className="flex justify-end gap-2 pt-2">
+                      <Button variant="outline" size="sm" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+                      <Button
+                        onClick={createMeeting}
+                        size="sm"
+                        disabled={!newMeeting.title || !newMeeting.timing || !newMeeting.location || submitting}
+                        className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+                      >
+                        {submitting ? "Scheduling..." : "Schedule Meeting"}
                       </Button>
                     </div>
-                  </DialogContent>
-                </Dialog>
-              )}
-            </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
           </div>
 
-          {sortedMeetings.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
-              <h3 className="text-xl font-medium mb-2">No meetings found</h3>
-              <p className="text-muted-foreground text-center">
-                {filter === "upcoming"
-                  ? "No upcoming meetings scheduled."
-                  : filter === "past"
-                  ? "No past meetings found."
-                  : "No meetings have been created yet."}
+          {/* Filter tabs */}
+          <div className="flex gap-1.5">
+            {(["upcoming", "past", "all"] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={cn(
+                  "px-3 py-1 text-xs font-medium rounded-md transition-all capitalize",
+                  filter === f
+                    ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+                    : "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:border-zinc-300"
+                )}
+              >
+                {f === "all" ? "All" : f}
+              </button>
+            ))}
+          </div>
+
+          {/* Meeting cards */}
+          {filtered.length === 0 ? (
+            <div className="text-center py-14 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800">
+              <Calendar className="w-8 h-8 text-zinc-400 mx-auto mb-2" />
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">No meetings found</p>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                {filter === "upcoming" ? "No upcoming meetings scheduled." : "No past meeting history found."}
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {sortedMeetings.map((meeting) => {
-                const meetingDate = new Date(meeting.timing)
-                const isPast = meetingDate < new Date() || meeting.completed
-                
-                // Ensure each meeting has a valid ID
-                const meetingKey = meeting.id || `meeting-${Math.random().toString(36).substring(2, 9)}`
-                
+            <div className="space-y-3">
+              {filtered.map(meeting => {
+                const meetingDate = new Date(meeting.timing);
+                const isPast = meetingDate < new Date() || meeting.completed;
+                const isOnline = meeting.location.toLowerCase() === "online";
+                const daysAway = Math.round((meetingDate.getTime() - Date.now()) / 86400000);
+
                 return (
-                  <Card key={meetingKey} className="hover:shadow-lg transition-shadow">
-                    <CardHeader>
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <CardTitle className="text-xl">{meeting.title}</CardTitle>
-                          {meeting.agenda && (
-                            <CardDescription className="mt-1 line-clamp-2">
-                              {meeting.agenda}
-                            </CardDescription>
-                          )}
-                        </div>
-                        <Badge variant={isPast ? "secondary" : "default"}>
-                          {isPast ? "Completed" : "Upcoming"}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <Separator />
-                    <CardContent className="pt-4 space-y-3">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm">
-                          {format(meetingDate, "PPP")} at {format(meetingDate, "p")}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm capitalize">{meeting.location}</span>
+                  <div
+                    key={meeting.id}
+                    className="bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 shadow-none"
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-9 h-9 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-700 dark:text-zinc-300 shrink-0">
+                        {isOnline ? <Monitor className="w-4 h-4" /> : <Building2 className="w-4 h-4" />}
                       </div>
 
-                      {meeting.jitsiLink && meeting.location.toLowerCase() === "online" && (
-                        <div className="flex items-center gap-2">
-                          <Video className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">Jitsi Meeting Available</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 leading-snug">{meeting.title}</p>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isOnline && (
+                              <Badge variant="outline" className="text-[10px]">
+                                Online
+                              </Badge>
+                            )}
+                            <Badge variant="outline" className="text-[10px]">
+                              {isPast ? "Concluded" : daysAway === 0 ? "Today" : `In ${daysAway}d`}
+                            </Badge>
+                          </div>
                         </div>
-                      )}
-                    </CardContent>
-                    <CardContent className="pt-0">
-                      {meeting.jitsiLink && meeting.location.toLowerCase() === "online" && !isPast && (
-                        <Button 
-                          className="w-full mt-2 gap-2"
-                          asChild
-                        >
-                          <a href={meeting.jitsiLink} target="_blank" rel="noopener noreferrer">
-                            <Video className="h-4 w-4" />
-                            Join Jitsi Meeting
-                          </a>
-                        </Button>
-                      )}
-                    </CardContent>
-                  </Card>
-                )
+
+                        {meeting.agenda && (
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2 leading-relaxed">{meeting.agenda}</p>
+                        )}
+
+                        <div className="flex items-center gap-4 mt-2.5 flex-wrap text-xs text-zinc-400">
+                          <span className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300 font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-zinc-400" />
+                            {format(meetingDate, "EEE, dd MMM yyyy")}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-zinc-400" />
+                            {format(meetingDate, "h:mm a")}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            {isOnline ? <Video className="w-3.5 h-3.5 text-zinc-400" /> : <MapPin className="w-3.5 h-3.5 text-zinc-400" />}
+                            {isOnline ? "Virtual Room" : meeting.location}
+                          </span>
+                        </div>
+
+                        {/* Join button for online upcoming meetings */}
+                        {isOnline && meeting.jitsiLink && !isPast && (
+                          <div className="mt-3 pt-2.5 border-t border-zinc-100 dark:border-zinc-800">
+                            <a
+                              href={meeting.jitsiLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-zinc-900 dark:bg-zinc-100 hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 text-xs font-medium rounded transition-colors"
+                            >
+                              Join Video Call
+                              <ArrowUpRight className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
               })}
             </div>
           )}
         </div>
-      </div>
+      </main>
     </div>
-  )
+  );
 }
-// "use client"
-
-// import { useEffect, useState } from "react"
-// import { format } from "date-fns"
-// import { Sidebar } from "@/components/sidebar"
-// import {
-//   Card,
-//   CardContent,
-//   CardDescription,
-//   CardHeader,
-//   CardTitle,
-// } from "@/components/ui/card"
-// import { Button } from "@/components/ui/button"
-// import { Separator } from "@/components/ui/separator"
-// import { Skeleton } from "@/components/ui/skeleton"
-// import { Input } from "@/components/ui/input"
-// import {
-//   Select,
-//   SelectContent,
-//   SelectItem,
-//   SelectTrigger,
-//   SelectValue,
-// } from "@/components/ui/select"
-// import { Calendar, MapPin, Video, Plus } from "lucide-react"
-// import { Badge } from "@/components/ui/badge"
-// import { toast } from "@/hooks/use-toast"
-// import {
-//   Dialog,
-//   DialogContent,
-//   DialogHeader,
-//   DialogTitle,
-//   DialogTrigger,
-// } from "@/components/ui/dialog"
-// import { Textarea } from "@/components/ui/textarea"
-// import { Label } from "@/components/ui/label"
-
-// interface Meeting {
-//   id: string
-//   title: string
-//   agenda?: string
-//   timing: string
-//   location: string
-//   completed: boolean
-//   jitsiLink?: string
-//   jitsiId?: string
-// }
-
-// interface UserData {
-//   id: string
-//   name: string
-//   email: string
-//   isAdmin: boolean
-// }
-
-// export default function MeetingsPage() {
-//   const [meetings, setMeetings] = useState<Meeting[]>([])
-//   const [loading, setLoading] = useState(true)
-//   const [userData, setUserData] = useState<UserData | null>(null)
-//   const [filter, setFilter] = useState<"all" | "upcoming" | "past">("upcoming")
-//   const [isDialogOpen, setIsDialogOpen] = useState(false)
-//   const [newMeeting, setNewMeeting] = useState({
-//     title: "",
-//     agenda: "",
-//     timing: "",
-//     location: ""
-//   })
-
-//   useEffect(() => {
-//     const fetchData = async () => {
-//       try {
-//         const token = localStorage.getItem("token")
-//         if (!token) throw new Error("Token not found")
-
-//         const [userRes, meetingsRes] = await Promise.all([
-//           fetch("http://localhost:5000/api/user/my", {
-//             headers: { Authorization: `Bearer ${token}` },
-//           }),
-//           fetch("http://localhost:5000/api/meeting/all", {
-//             headers: { Authorization: `Bearer ${token}` },
-//           })
-//         ])
-
-//         if (!userRes.ok || !meetingsRes.ok) throw new Error("Failed to fetch data")
-
-//         const [userData, meetingsData] = await Promise.all([
-//           userRes.json(),
-//           meetingsRes.json()
-//         ])
-
-//         setUserData(userData)
-//         setMeetings(meetingsData)
-//       } catch (err) {
-//         console.error("Error fetching data:", err)
-//         toast({
-//           title: "Error",
-//           description: "Failed to load meetings data",
-//           variant: "destructive",
-//         })
-//       } finally {
-//         setLoading(false)
-//       }
-//     }
-
-//     fetchData()
-//   }, [])
-
-//   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-//     const { name, value } = e.target
-//     setNewMeeting(prev => ({ ...prev, [name]: value }))
-//   }
-
-//   const generateJitsiLink = (title: string) => {
-//     // Simple Jitsi link generation without API
-//     const roomName = title.toLowerCase().replace(/\s+/g, '-') + '-' + 
-//       Math.random().toString(36).substring(2, 7)
-//     return `https://meet.jit.si/${roomName}`
-//   }
-
-// //   const createMeeting = async () => {
-// //     try {
-// //       const token = localStorage.getItem("token")
-// //       if (!token) throw new Error("Token not found")
-
-// //       const jitsiLink = generateJitsiLink(newMeeting.title)
-// //       const jitsiId = jitsiLink.split('/').pop()
-
-// //       const response = await fetch("http://localhost:5000/api/meeting/create", {
-// //         method: "POST",
-// //         headers: {
-// //           "Content-Type": "application/json",
-// //           Authorization: `Bearer ${token}`,
-// //         },
-// //         body: JSON.stringify({
-// //           ...newMeeting,
-// //           jitsiLink,
-// //           jitsiId
-// //         })
-// //       })
-
-// //       if (!response.ok) throw new Error("Failed to create meeting")
-
-// //       const createdMeeting = await response.json()
-// //       setMeetings(prev => [createdMeeting, ...prev])
-// //       setIsDialogOpen(false)
-// //       setNewMeeting({
-// //         title: "",
-// //         agenda: "",
-// //         timing: "",
-// //         location: ""
-// //       })
-
-// //       toast({
-// //         title: "Success",
-// //         description: "Meeting created successfully",
-// //       })
-// //     } catch (error) {
-// //       console.error("Error creating meeting:", error)
-// //       toast({
-// //         title: "Error",
-// //         description: "Failed to create meeting",
-// //         variant: "destructive",
-// //       })
-// //     }
-// //   }
-//     const createMeeting = async () => {
-//     try {
-//       const token = localStorage.getItem("token")
-//       if (!token) throw new Error("Token not found")
-  
-//       // Check if location is "online" (case-insensitive)
-//       const isOnlineMeeting = newMeeting.location.toLowerCase() === "online"
-//       let jitsiLink;
-//       let jitsiId;
-  
-//       if (isOnlineMeeting) {
-//         jitsiLink = generateJitsiLink(newMeeting.title)
-//         jitsiId = jitsiLink.split('/').pop()
-//       }
-  
-//       const response = await fetch("http://localhost:5000/api/meeting/create", {
-//         method: "POST",
-//         headers: {
-//           "Content-Type": "application/json",
-//           Authorization: `Bearer ${token}`,
-//         },
-//         body: JSON.stringify({
-//           ...newMeeting,
-//           jitsiLink: isOnlineMeeting ? jitsiLink : undefined,
-//           jitsiId: isOnlineMeeting ? jitsiId : undefined
-//         })
-//       })
-  
-//       if (!response.ok) throw new Error("Failed to create meeting")
-  
-//       const createdMeeting = await response.json()
-//       setMeetings(prev => [createdMeeting, ...prev])
-//       setIsDialogOpen(false)
-//       setNewMeeting({
-//         title: "",
-//         agenda: "",
-//         timing: "",
-//         location: ""
-//       })
-  
-//       toast({
-//         title: "Success",
-//         description: "Meeting created successfully",
-//       })
-//     } catch (error) {
-//       console.error("Error creating meeting:", error)
-//       toast({
-//         title: "Error",
-//         description: "Failed to create meeting",
-//         variant: "destructive",
-//       })
-//     }
-//   }
-
-//   const filteredMeetings = meetings.filter((meeting) => {
-//     const now = new Date()
-//     const meetingDate = new Date(meeting.timing)
-    
-//     if (filter === "upcoming") return meetingDate >= now && !meeting.completed
-//     if (filter === "past") return meetingDate < now || meeting.completed
-//     return true
-//   })
-
-//   const sortedMeetings = [...filteredMeetings].sort((a, b) => 
-//     new Date(a.timing).getTime() - new Date(b.timing).getTime()
-//   )
-
-//   if (loading) {
-//     return (
-//       <div className="flex h-screen">
-//         <Sidebar userType="user" />
-//         <div className="container mx-auto px-4 py-8">
-//           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-//             <Skeleton className="h-10 w-64" />
-//             <Skeleton className="h-10 w-32" />
-//           </div>
-//           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-//             {[...Array(3)].map((_, i) => (
-//               <Skeleton key={i} className="h-60 rounded-xl" />
-//             ))}
-//           </div>
-//         </div>
-//       </div>
-//     )
-//   }
-
-//   return (
-//     <div className="flex h-screen">
-//       <Sidebar userType="user" />
-      
-//       <div className="flex-1 overflow-y-auto">
-//         <div className="container mx-auto px-4 py-8">
-//           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-//             <h1 className="text-3xl font-bold">Society Meetings</h1>
-//             <div className="flex gap-2 mr-12">
-//               <Select 
-//                 value={filter} 
-//                 onValueChange={(value: "all" | "upcoming" | "past") => setFilter(value)}
-//               >
-//                 <SelectTrigger className="w-[180px]">
-//                   <SelectValue placeholder="Filter meetings" />
-//                 </SelectTrigger>
-//                 <SelectContent>
-//                   <SelectItem value="upcoming">Upcoming</SelectItem>
-//                   <SelectItem value="past">Past</SelectItem>
-//                   <SelectItem value="all">All Meetings</SelectItem>
-//                 </SelectContent>
-//               </Select>
-
-//               {userData?.isAdmin && (
-//                 <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-//                   <DialogTrigger asChild>
-//                     <Button className="gap-2">
-//                       <Plus className="h-4 w-4" />
-//                       Schedule Meeting
-//                     </Button>
-//                   </DialogTrigger>
-//                   <DialogContent>
-//                     <DialogHeader>
-//                       <DialogTitle>Schedule New Meeting</DialogTitle>
-//                     </DialogHeader>
-//                     <div className="grid gap-4 py-4">
-//                       <div className="grid grid-cols-4 items-center gap-4">
-//                         <Label htmlFor="title" className="text-right">
-//                           Title
-//                         </Label>
-//                         <Input
-//                           id="title"
-//                           name="title"
-//                           value={newMeeting.title}
-//                           onChange={handleInputChange}
-//                           className="col-span-3"
-//                           required
-//                         />
-//                       </div>
-//                       <div className="grid grid-cols-4 items-center gap-4">
-//                         <Label htmlFor="agenda" className="text-right">
-//                           Agenda
-//                         </Label>
-//                         <Textarea
-//                           id="agenda"
-//                           name="agenda"
-//                           value={newMeeting.agenda}
-//                           onChange={handleInputChange}
-//                           className="col-span-3"
-//                           rows={3}
-//                         />
-//                       </div>
-//                       <div className="grid grid-cols-4 items-center gap-4">
-//                         <Label htmlFor="timing" className="text-right">
-//                           Date & Time
-//                         </Label>
-//                         <Input
-//                           id="timing"
-//                           name="timing"
-//                           type="datetime-local"
-//                           value={newMeeting.timing}
-//                           onChange={handleInputChange}
-//                           className="col-span-3"
-//                           required
-//                         />
-//                       </div>
-//                       <div className="grid grid-cols-4 items-center gap-4">
-//                         <Label htmlFor="location" className="text-right">
-//                           Location
-//                         </Label>
-//                         <Input
-//                           id="location"
-//                           name="location"
-//                           value={newMeeting.location}
-//                           onChange={handleInputChange}
-//                           className="col-span-3"
-//                           required
-//                         />
-//                       </div>
-//                     </div>
-//                     <div className="flex justify-end gap-2">
-//                       <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-//                         Cancel
-//                       </Button>
-//                       <Button onClick={createMeeting}>
-//                         Schedule Meeting
-//                       </Button>
-//                     </div>
-//                   </DialogContent>
-//                 </Dialog>
-//               )}
-//             </div>
-//           </div>
-
-//           {sortedMeetings.length === 0 ? (
-//             <div className="flex flex-col items-center justify-center py-12">
-//               <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
-//               <h3 className="text-xl font-medium mb-2">No meetings found</h3>
-//               <p className="text-muted-foreground text-center">
-//                 {filter === "upcoming"
-//                   ? "No upcoming meetings scheduled."
-//                   : filter === "past"
-//                   ? "No past meetings found."
-//                   : "No meetings have been created yet."}
-//               </p>
-//             </div>
-//           ) : (
-//             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-//               {sortedMeetings.map((meeting) => {
-//                 const meetingDate = new Date(meeting.timing)
-//                 const isPast = meetingDate < new Date() || meeting.completed
-                
-//                 return (
-//                   <Card key={meeting.id} className="hover:shadow-lg transition-shadow">
-//                     <CardHeader>
-//                       <div className="flex justify-between items-start">
-//                         <div>
-//                           <CardTitle className="text-xl">{meeting.title}</CardTitle>
-//                           {meeting.agenda && (
-//                             <CardDescription className="mt-1 line-clamp-2">
-//                               {meeting.agenda}
-//                             </CardDescription>
-//                           )}
-//                         </div>
-//                         <Badge variant={isPast ? "secondary" : "default"}>
-//                           {isPast ? "Completed" : "Upcoming"}
-//                         </Badge>
-//                       </div>
-//                     </CardHeader>
-//                     <Separator />
-//                     <CardContent className="pt-4 space-y-3">
-//                       <div className="flex items-center gap-2">
-//                         <Calendar className="h-4 w-4 text-muted-foreground" />
-//                         <span className="text-sm">
-//                           {format(meetingDate, "PPP")} at {format(meetingDate, "p")}
-//                         </span>
-//                       </div>
-                      
-//                       <div className="flex items-center gap-2">
-//                         <MapPin className="h-4 w-4 text-muted-foreground" />
-//                         <span className="text-sm capitalize">{meeting.location}</span>
-//                       </div>
-
-//                       {meeting.jitsiLink && meeting.location.toLowerCase() === "online" && (
-//                         <div className="flex items-center gap-2">
-//                             <Video className="h-4 w-4 text-muted-foreground" />
-//                             <span className="text-sm">Jitsi Meeting Available</span>
-//                         </div>
-//                         )}
-//                     </CardContent>
-//                     <CardContent className="pt-0">
-//                     {meeting.jitsiLink && meeting.location.toLowerCase() === "online" && !isPast && (
-//                         <Button 
-//                             className="w-full mt-2 gap-2"
-//                             asChild
-//                         >
-//                             <a href={meeting.jitsiLink} target="_blank" rel="noopener noreferrer">
-//                             <Video className="h-4 w-4" />
-//                             Join Jitsi Meeting
-//                             </a>
-//                         </Button>
-//                         )}
-//                     </CardContent>
-//                   </Card>
-//                 )
-//               })}
-//             </div>
-//           )}
-//         </div>
-//       </div>
-//     </div>
-//   )
-// }

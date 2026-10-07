@@ -1,846 +1,589 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { Sidebar } from "@/components/sidebar"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Separator } from "@/components/ui/separator"
-import { Label } from "@/components/ui/label"
-import { cn } from "@/lib/utils"
-import Link from "next/link"
-
+import React, { useEffect, useState } from "react";
+import { Sidebar } from "@/components/sidebar";
+import { toast } from "sonner";
+import Link from "next/link";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { Check, X } from "lucide-react"
+  QrCode,
+  Siren,
+  ShoppingBag,
+  Receipt,
+  Check,
+  X,
+  ArrowRight,
+  User,
+  Building2,
+  Clock,
+  Wrench,
+  ShieldCheck,
+  CheckCircle2,
+  AlertCircle,
+  PhoneCall,
+  Sparkles,
+  Car,
+  CalendarDays,
+  UserCheck,
+  Share2,
+  Copy,
+  Plus,
+  ExternalLink,
+  ShieldAlert,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  getOrCreateDemoStore,
+  approveVisitorLocal,
+  denyVisitorLocal,
+  payMaintenanceLocal,
+  VisitorItem,
+  DemoResident,
+  GatePassItem,
+} from "@/lib/mock-data";
 
-interface Room {
-  room: string
-  block: string
-  Maintenance: Maintenance[]
-}
+export default function UserDashboard() {
+  const [resident, setResident] = useState<DemoResident | null>(null);
+  const [visitors, setVisitors] = useState<VisitorItem[]>([]);
+  const [gatePasses, setGatePasses] = useState<GatePassItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-interface Maintenance {
-  maintenanceId: string
-  amount: number
-  paid: boolean
-  month: string
-  year: string
-}
-
-interface Visitor {
-  visitorId: string
-  name: string
-  age: number
-  address: string
-  purpose: string
-  number: number
-  photo?: string
-  status: boolean
-}
-
-interface UserData {
-  userId: string
-  email: string
-  number: string
-  profileUrl: string | null
-  name: string
-  room: Room
-  Visitor: Visitor[]
-}
-
-// Add this declare global for Razorpay
-declare global {
-  interface Window {
-    Razorpay: any;
-  }
-}
-
-export default function UserDashboardPage() {
-  const [userData, setUserData] = useState<UserData | null>(null)
-  const [loading, setLoading] = useState(true)
-  
-  const handleApproveVisitor = async (visitorId: string) => {
-    try {
-      const token = localStorage.getItem("token")
-      const res = await fetch("http://localhost:5000/api/visitor/inside", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ visitorId })
-      })
-      if (!res.ok) throw new Error("Failed to approve visitor")
-      const updatedVisitor = await res.json()
-      setUserData((prev) =>
-        prev
-          ? {
-              ...prev,
-              Visitor: prev.Visitor.map((v) =>
-                v.visitorId === visitorId ? { ...v, status: true } : v
-              ),
-            }
-          : null
-      )
-    } catch (err) {
-      console.error(err)
-    }
-  }
-
-  // Updated handlePayMaintenance for Razorpay
-  const handlePayMaintenance = async (maintenanceId: string, amount: number) => {
-    try {
-      if (!userData?.userId) {
-        console.error("User ID not available");
-        return;
-      }
-      
-      // Create a Razorpay order
-      const res = await fetch("/api/payment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          maintenanceId,
-          amount,
-          userId: userData.userId,
-        }),
-      });
-  
-      const data = await res.json();
-      
-      if (!data.id) {
-        throw new Error(data.error || "Failed to create payment");
-      }
-      
-      // Load Razorpay script
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.async = true;
-      
-      document.body.appendChild(script);
-      
-      script.onload = () => {
-        const token = localStorage.getItem("token")
-        const options = {
-          key: data.key,
-          amount: data.amount,
-          currency: data.currency,
-          name: "Society Maintenance",
-          description: `Maintenance Payment for ${maintenanceId}`,
-          order_id: data.id,
-          handler: async (response: any) => {
-            try {
-              // Verify payment on your server
-              const verifyResponse = await fetch('/api/payment', {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  razorpay_order_id: response.razorpay_order_id,
-                  razorpay_payment_id: response.razorpay_payment_id,
-                  razorpay_signature: response.razorpay_signature,
-                }),
-              });
-              
-              const verifyData = await verifyResponse.json();
-              
-              if (verifyData.success) {
-                  await fetch("http://localhost:5000/api/maintenance/update", {
-                  method: "PATCH",
-                  headers: {"Content-Type": "application/json",Authorization: `Bearer ${token}` },
-                  body: JSON.stringify({ maintenanceId }),
-                  });
-              
-                  // Step 3: Inform user and refresh
-                  alert("Payment successful!");
-                // Update local state to mark maintenance as paid
-                setUserData((prev) => {
-                  if (!prev) return null;
-                  
-                  return {
-                    ...prev,
-                    room: {
-                      ...prev.room,
-                      Maintenance: prev.room.Maintenance.map(m => 
-                        m.maintenanceId === maintenanceId ? {...m, paid: true} : m
-                      )
-                    }
-                  };
-                });
-                
-                alert("Payment successful!");
-              } else {
-                alert("Payment verification failed. Please contact support.");
-              }
-            } catch (error) {
-              console.error("Payment verification error:", error);
-              alert("Error processing payment verification");
-            }
-          },
-          prefill: {
-            name: userData.name,
-            email: userData.email,
-            contact: userData.number,
-          },
-          theme: {
-            color: "#3399cc",
-          },
-          modal: {
-            ondismiss: function() {
-              console.log("Payment cancelled");
-            },
-          },
-        };
-        
-        const paymentObject = new window.Razorpay(options);
-        paymentObject.open();
-      };
-      
-      script.onerror = () => {
-        alert("Failed to load Razorpay. Please try again.");
-        document.body.removeChild(script);
-      };
-      
-    } catch (err) {
-      console.error("Error initiating payment:", err);
-      alert("Failed to initiate payment. Please try again later.");
-    }
+  const syncData = () => {
+    const store = getOrCreateDemoStore();
+    setResident(store.resident);
+    setVisitors(store.visitors);
+    setGatePasses(store.gatePasses);
+    setIsLoading(false);
   };
-  
-  const handleRejectVisitor = async (visitorId: string) => {
-    try {
-      const token = localStorage.getItem("token")
-      const res = await fetch("http://localhost:5000/api/visitor/delete", {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ visitorId })
-      })
-      if (!res.ok) throw new Error("Failed to reject visitor")
-      setUserData((prev) =>
-        prev
-          ? {
-              ...prev,
-              Visitor: prev.Visitor.filter((v) => v.visitorId !== visitorId),
-            }
-          : null
-      )
-    } catch (err) {
-      console.error(err)
-    }
-  }
 
   useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const token = localStorage.getItem("token")
-        if (!token) throw new Error("Token not found")
+    syncData();
+  }, []);
 
-        const res = await fetch("http://localhost:5000/api/user/my", {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        })
+  const handleApproveVisitor = (visitorId: string, name: string) => {
+    const updated = approveVisitorLocal(visitorId);
+    setVisitors(updated);
+    toast.success(`Entry Approved for ${name}`, {
+      description: "Digital gate barrier opened. Security console notified.",
+    });
+  };
 
-        if (!res.ok) throw new Error("Failed to fetch user")
+  const handleDenyVisitor = (visitorId: string, name: string) => {
+    const updated = denyVisitorLocal(visitorId);
+    setVisitors(updated);
+    toast.error(`Entry Denied for ${name}`, {
+      description: "Security guard informed to turn visitor away.",
+    });
+  };
 
-        const data = await res.json()
-        setUserData(data)
-      } catch (err) {
-        console.error("Error fetching user:", err)
-      } finally {
-        setLoading(false)
-      }
+  const handlePayBill = (maintenanceId: string, amount: number) => {
+    const updatedResident = payMaintenanceLocal(maintenanceId);
+    setResident({ ...updatedResident });
+    toast.success("Maintenance Paid Successfully", {
+      description: `INR ${amount.toLocaleString()} settled via Razorpay. GST Invoice generated.`,
+    });
+  };
+
+  const copyPin = (pin: string) => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(pin);
+      toast.success(`Pass PIN ${pin} copied to clipboard`);
     }
+  };
 
-    fetchUser()
-  }, [])
-
-  const unpaidMaintenance = userData?.room?.Maintenance?.filter(m => !m.paid) || []
-  const activeVisitors = userData?.Visitor || []
+  const waitingVisitors = visitors.filter((v) => !v.status && !v.hasLeft);
+  const insideVisitors = visitors.filter((v) => v.status && !v.hasLeft);
+  const unpaidMaintenance = resident?.room?.Maintenance?.filter((m) => !m.paid) || [];
+  const totalDue = unpaidMaintenance.reduce((sum, m) => sum + m.amount, 0);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <Sidebar userType="user" />
 
-      <main className="flex-1 p-6 overflow-y-auto bg-background text-foreground">
-        <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
+      <main className="flex-1 overflow-y-auto">
+        <div className="w-full max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
+          {/* Welcome Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-200 dark:border-zinc-800">
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl lg:text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  Welcome back, {resident?.name?.split(" ")[0] || "Arjun"}
+                </h1>
+                <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 text-xs font-semibold px-2.5 py-0.5">
+                  Flat Owner
+                </Badge>
+              </div>
+              <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-1.5 flex items-center gap-2 font-medium">
+                <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <span>{resident?.room?.society || "Palm Heights Township"} &bull; Tower {resident?.room?.block || "A"} &bull; Apartment {resident?.room?.room || "304"}</span>
+              </p>
+            </div>
 
-        {loading ? (
-          <div className="grid gap-6 md:grid-cols-2">
-            <Skeleton className="h-40 rounded-xl" />
-            <Skeleton className="h-40 rounded-xl" />
+            {/* Live System Status Chips */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Intercom Gate: Online
+              </span>
+              <Link
+                href="/security"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-slate-300 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400 hover:text-blue-600 transition shadow-sm"
+              >
+                <span>Switch to Guard Console</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
           </div>
-        ) : userData ? (
-          <div className="grid gap-6 md:grid-cols-2">
-            {/* Profile Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-xl font-semibold">My Profile</CardTitle>
-              </CardHeader>
-              <Separator />
-              <CardContent className="flex flex-col gap-6 p-6">
-                <div className="flex items-center gap-4">
-                  <Avatar className="h-16 w-16">
-                    <AvatarImage src={userData.profileUrl || ""} />
-                    <AvatarFallback>
-                      {userData.name
-                        .split(" ")
-                        .map((n) => n[0].toUpperCase())
-                        .join("")}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="text-lg font-medium">{userData.name}</p>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <Label className="text-muted-foreground">Phone Number</Label>
-                    <p className="font-medium">{userData.number}</p>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Email</Label>
-                    <p className="font-medium">{userData.email}</p>
-                  </div>
+          {/* Real-time Incoming Visitor Alert Banner (If Any Waiting) */}
+          {waitingVisitors.length > 0 && (
+            <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/90 dark:bg-amber-950/30 p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5 text-amber-900 dark:text-amber-200 font-bold text-sm">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping" />
+                  Visitor Awaiting Your Authorization at Main Gate
                 </div>
-              </CardContent>
-            </Card>
+                <Badge variant="outline" className="border-amber-400 text-amber-800 dark:text-amber-300 text-xs font-semibold">
+                  Real-time Intercom
+                </Badge>
+              </div>
 
-            {/* Room Info Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-xl font-semibold">Room Information</CardTitle>
-              </CardHeader>
-              <Separator />
-              <CardContent className="p-6 space-y-4 text-sm">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-muted-foreground">Block</Label>
-                    <p className="font-medium text-lg">{userData.room.block}</p>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Room No.</Label>
-                    <p className="font-medium text-lg">{userData.room.room}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Unpaid Maintenance Card */}
-            <Card className={cn("border", unpaidMaintenance.length ? "border-red-500" : "")}>
-              <CardHeader>
-                <CardTitle className="text-xl font-semibold text-red-600">Unpaid Maintenance</CardTitle>
-              </CardHeader>
-              <Separator />
-              <CardContent className="p-6 space-y-2 text-sm">
-                {unpaidMaintenance.length > 0 ? (
-                  unpaidMaintenance.map((m) => (
-                    <div key={m.maintenanceId} className="flex justify-between items-center">
-                      <div>
-                        <p className="font-medium">{m.month} {m.year}</p>
-                        <p className="font-semibold text-red-600">₹{m.amount}</p>
-                      </div>
-                      <Button onClick={() => handlePayMaintenance(m.maintenanceId, m.amount)} size="sm">
-                        Pay Now
-                      </Button>
+              {waitingVisitors.map((v) => (
+                <div
+                  key={v.visitorId}
+                  className="p-4 rounded-lg bg-white dark:bg-zinc-900 border border-amber-200 dark:border-amber-900/60 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-3">
+                      <span className="font-semibold text-base text-zinc-900 dark:text-zinc-100">{v.name}</span>
+                      <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200 border-none text-xs font-semibold px-2 py-0.5">
+                        {v.purpose}
+                      </Badge>
                     </div>
-                  ))
-                ) : (
-                  <p className="text-green-600 font-medium">No unpaid maintenance</p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Current Visitors Card */}
-            <Link href="/user/visitors">
-              <Card className="rounded-2xl shadow-md border border-border bg-background transition hover:shadow-lg cursor-pointer">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-lg font-bold text-foreground">Visitors</CardTitle>
-                </CardHeader>
-                <Separator />
-                <CardContent className="px-4 py-2">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-left text-muted-foreground">Name</TableHead>
-                        <TableHead className="text-left text-muted-foreground">Purpose</TableHead>
-                        <TableHead className="text-left text-muted-foreground">Phone Number</TableHead>
-                        <TableHead className="text-left text-muted-foreground">Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {activeVisitors.length > 0 ? (
-                        activeVisitors.map((v) => (
-                          <TableRow key={v.visitorId} className="transition rounded-lg">
-                            <TableCell className="font-medium text-foreground">{v.name}</TableCell>
-                            <TableCell className="text-muted-foreground">{v.purpose}</TableCell>
-                            <TableCell className="text-foreground">{v.number}</TableCell>
-                            <TableCell>
-                              <span
-                                className={`font-semibold ${v.status ? "text-green-500" : "text-yellow-500"}`}
-                              >
-                                {v.status ? "Inside" : "Pending"}
-                              </span>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      ) : (
-                        <TableRow>
-                          <TableCell
-                            colSpan={4}
-                            className="text-center text-sm text-muted-foreground py-4"
-                          >
-                            No visitors currently inside.
-                          </TableCell>
-                        </TableRow>
+                    <div className="flex items-center gap-4 text-xs font-medium text-zinc-600 dark:text-zinc-300 flex-wrap">
+                      <span className="flex items-center gap-1.5">
+                        <PhoneCall className="w-3.5 h-3.5 text-zinc-500" />
+                        {v.number}
+                      </span>
+                      {v.vehicleNo && (
+                        <span className="flex items-center gap-1.5">
+                          <Car className="w-3.5 h-3.5 text-zinc-500" />
+                          {v.vehicleNo}
+                        </span>
                       )}
-                    </TableBody>
-                  </Table>
+                      <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-semibold">
+                        <Clock className="w-3.5 h-3.5" />
+                        Arrived 4 mins ago
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <Button
+                      size="sm"
+                      onClick={() => handleApproveVisitor(v.visitorId, v.name)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-4 py-2 h-9 shadow-sm"
+                    >
+                      <Check className="w-4 h-4 mr-1.5" />
+                      Approve Entry
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleDenyVisitor(v.visitorId, v.name)}
+                      className="text-xs font-semibold h-9 px-3.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 border-red-200 dark:border-red-900/50"
+                    >
+                      <X className="w-4 h-4 mr-1.5" />
+                      Decline
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 2-Column Responsive Dashboard Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left Main Column (7 Columns) */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* Quick Metrics (3 Cards) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Maintenance Card */}
+                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                  <CardContent className="p-5 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                      <span>Maintenance</span>
+                      <Receipt className="w-4 h-4 text-blue-600" />
+                    </div>
+                    {totalDue > 0 ? (
+                      <>
+                        <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
+                          ₹{totalDue.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold">
+                          Due: 15 Oct 2026 (October)
+                        </p>
+                        <div className="pt-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handlePayBill(unpaidMaintenance[0].maintenanceId, unpaidMaintenance[0].amount)}
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold h-8"
+                          >
+                            Pay in 1 Click
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
+                          Clear &amp; Paid
+                        </p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">All invoices settled</p>
+                        <div className="pt-2">
+                          <Link
+                            href="/user/maintenance"
+                            className="block text-center text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline py-1"
+                          >
+                            View Invoices &rarr;
+                          </Link>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Active Gate Passes Card */}
+                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                  <CardContent className="p-5 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                      <span>Active Passes</span>
+                      <QrCode className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
+                      {gatePasses.length}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Active PIN passes issued</p>
+                    <div className="pt-2">
+                      <Link
+                        href="/user/gatepass"
+                        className="block text-center text-xs bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-semibold py-1.5 rounded-md transition"
+                      >
+                        + Issue Pass
+                      </Link>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Inside Premises Card */}
+                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                  <CardContent className="p-5 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                      <span>Visitors Inside</span>
+                      <UserCheck className="w-4 h-4 text-emerald-600" />
+                    </div>
+                    <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
+                      {insideVisitors.length}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium truncate">
+                      {insideVisitors.length > 0 ? insideVisitors[0].name : "No visitors inside"}
+                    </p>
+                    <div className="pt-2">
+                      <Link
+                        href="/user/visitors"
+                        className="block text-center text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline py-1"
+                      >
+                        View Registry &rarr;
+                      </Link>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Society Hub Services (4 Cards Grid) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
+                    Society Hub Services
+                  </h2>
+                  <span className="text-xs text-zinc-500 font-medium">Quick Access</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <Link
+                    href="/user/gatepass"
+                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-md transition-all group"
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                        <QrCode className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Digital Gate Pass</p>
+                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
+                          Issue instant 6-digit PIN passes for guests, cabs, and delivery partners.
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/user/marketplace"
+                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-md transition-all group"
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                        <ShoppingBag className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Resident Marketplace</p>
+                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
+                          Buy, sell, and give away verified pre-owned items within your society walls.
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/user/bookings"
+                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-teal-500 dark:hover:border-teal-500 hover:shadow-md transition-all group"
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-lg bg-teal-50 dark:bg-teal-950/50 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 group-hover:bg-teal-600 group-hover:text-white transition-colors">
+                        <Wrench className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Facility Services</p>
+                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
+                          Book trusted society plumbers (Raju) and laundry care (FreshPress).
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/user/sos"
+                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-red-500 dark:hover:border-red-500 hover:shadow-md transition-all group"
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-lg bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0 group-hover:bg-red-600 group-hover:text-white transition-colors">
+                        <Siren className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Emergency SOS</p>
+                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
+                          Instant tower-wide panic broadcast to security gate desk and marshals.
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Active Visitors Inside Flat Table/List */}
+              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Currently Inside Apartment
+                    </CardTitle>
+                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Visitors currently marked active inside Tower A - Flat 304
+                    </CardDescription>
+                  </div>
+                  <Link href="/user/visitors" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                    Full Registry &rarr;
+                  </Link>
+                </CardHeader>
+                <CardContent className="p-5 space-y-3">
+                  {insideVisitors.length > 0 ? (
+                    insideVisitors.map((v) => (
+                      <div
+                        key={v.visitorId}
+                        className="flex items-center justify-between p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{v.name}</span>
+                            <Badge variant="outline" className="text-xs border-emerald-300 text-emerald-700 dark:text-emerald-400 font-semibold">
+                              {v.purpose}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400 font-medium">
+                            <span>Phone: {v.number}</span>
+                            {v.vehicleNo && <span>Vehicle: {v.vehicleNo}</span>}
+                            <span>Entered: {v.entryTime || "13:45"}</span>
+                          </div>
+                        </div>
+                        <Badge className="bg-emerald-600 text-white text-xs font-semibold px-2.5 py-1">
+                          Inside Flat
+                        </Badge>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-6 text-center text-xs text-zinc-500 font-medium">
+                      No visitors currently inside. New arrivals will show here once admitted.
+                    </div>
+                  )}
                 </CardContent>
               </Card>
-            </Link>
+            </div>
+
+            {/* Right Rail Column (5 Columns) */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* Active Gate Passes Box */}
+              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Active Gate Passes
+                    </CardTitle>
+                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Valid passes for upcoming arrivals today
+                    </CardDescription>
+                  </div>
+                  <Link
+                    href="/user/gatepass"
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> New Pass
+                  </Link>
+                </CardHeader>
+                <CardContent className="p-5 space-y-3.5">
+                  {gatePasses.map((p) => (
+                    <div
+                      key={p.passId}
+                      className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{p.guestName}</span>
+                        <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 text-xs font-semibold px-2 py-0.5">
+                          Valid 4h
+                        </Badge>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <div>
+                          <p className="text-xs text-zinc-500 font-medium">Entry PIN</p>
+                          <p className="text-lg font-mono font-bold tracking-widest text-zinc-900 dark:text-zinc-100">
+                            {p.pin}
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => copyPin(p.pin)}
+                          className="text-xs h-8 font-semibold text-zinc-700 dark:text-zinc-300 border-slate-300 dark:border-zinc-700"
+                        >
+                          <Copy className="w-3.5 h-3.5 mr-1" />
+                          Copy PIN
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 pt-1 border-t border-slate-200 dark:border-zinc-800 font-medium">
+                        <span>{p.entryType}</span>
+                        {p.vehicleNumber && <span>Vehicle: {p.vehicleNumber}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              {/* Society Announcements & Noticeboard */}
+              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Society Announcements
+                    </CardTitle>
+                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Official notices posted by RWA Committee
+                    </CardDescription>
+                  </div>
+                  <Link href="/user/events" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                    View All &rarr;
+                  </Link>
+                </CardHeader>
+                <CardContent className="p-5 space-y-3.5">
+                  <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Annual General Body Meeting (AGM)</span>
+                      <Badge className="bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-300 border-none text-xs font-semibold">
+                        Upcoming
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-300 font-medium leading-relaxed">
+                      Clubhouse Main Hall and Online Jitsi stream. Saturday at 10:00 AM.
+                    </p>
+                    <p className="text-xs text-zinc-400 font-medium pt-1">Agenda: Annual financial audit &amp; security upgrades.</p>
+                  </div>
+
+                  <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Overhead Water Tank Deep Cleaning</span>
+                      <Badge variant="outline" className="text-zinc-600 dark:text-zinc-400 text-xs font-semibold">
+                        Maintenance
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-300 font-medium leading-relaxed">
+                      Scheduled supply shutdown 1:00 PM to 4:00 PM this Thursday for Tower A and Tower B.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Verified Service Partners Snapshot */}
+              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
+                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                    Verified Service Partners
+                  </CardTitle>
+                  <Link href="/user/bookings" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                    Book &rarr;
+                  </Link>
+                </CardHeader>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                        <Wrench className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Raju Sharma (QuickPlumb)</p>
+                        <p className="text-xs text-zinc-500 font-medium">Society Plumber &bull; 4.9 Rating</p>
+                      </div>
+                    </div>
+                    <Link
+                      href="/plumber"
+                      className="text-xs font-semibold text-blue-600 hover:underline px-2 py-1"
+                    >
+                      View &rarr;
+                    </Link>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-teal-100 dark:bg-teal-950 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">FreshPress Laundry Care</p>
+                        <p className="text-xs text-zinc-500 font-medium">Express Wash &bull; 4.8 Rating</p>
+                      </div>
+                    </div>
+                    <Link
+                      href="/laundry"
+                      className="text-xs font-semibold text-teal-600 hover:underline px-2 py-1"
+                    >
+                      View &rarr;
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
-        ) : (
-          <p className="text-red-500">Failed to load user data.</p>
-        )}
+        </div>
       </main>
     </div>
-  )
+  );
 }
-// "use client"
-
-// import { useEffect, useState } from "react"
-// import { Sidebar } from "@/components/sidebar"
-// import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-// import { Skeleton } from "@/components/ui/skeleton"
-// import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-// import { Separator } from "@/components/ui/separator"
-// import { Label } from "@/components/ui/label"
-// import { cn } from "@/lib/utils"
-// import Link from "next/link"
-
-// import {
-//   Table,
-//   TableBody,
-//   TableCell,
-//   TableHead,
-//   TableHeader,
-//   TableRow,
-// } from "@/components/ui/table"
-// import { Button } from "@/components/ui/button"
-// import { Check, X } from "lucide-react"
-
-// interface Room {
-//   room: string
-//   block: string
-//   Maintenance: Maintenance[]
-// }
-
-// interface Maintenance {
-//   maintenanceId: string
-//   amount: number
-//   paid: boolean
-//   month: string
-//   year: string
-// }
-
-// interface Visitor {
-//   visitorId: string
-//   name: string
-//   age: number
-//   address: string
-//   purpose: string
-//   number: number
-//   photo?: string
-//   status: boolean
-// }
-
-// interface UserData {
-//   userId: string
-//   email: string
-//   number: string
-//   profileUrl: string | null
-//   name: string
-//   room: Room
-//   Visitor: Visitor[]
-// }
-
-// export default function UserDashboardPage() {
-//   const [userData, setUserData] = useState<UserData | null>(null)
-//   const [loading, setLoading] = useState(true)
-//   const handleApproveVisitor = async (visitorId: string) => {
-//     try {
-//       const token = localStorage.getItem("token")
-//       const res = await fetch("http://localhost:5000/api/visitor/inside", {
-//         method: "PUT",
-//         headers: {
-//           "Content-Type": "application/json",
-//           Authorization: `Bearer ${token}`
-//         },
-//         body: JSON.stringify({ visitorId })
-//       })
-//       if (!res.ok) throw new Error("Failed to approve visitor")
-//       const updatedVisitor = await res.json()
-//       setUserData((prev) =>
-//         prev
-//           ? {
-//               ...prev,
-//               Visitor: prev.Visitor.map((v) =>
-//                 v.visitorId === visitorId ? { ...v, status: true } : v
-//               ),
-//             }
-//           : null
-//       )
-//     } catch (err) {
-//       console.error(err)
-//     }
-//   }
-
-//   const handlePayMaintenance = async (maintenanceId: string, amount: number) => {
-//     try {
-//       const token = localStorage.getItem("token");
-  
-//       const res = await fetch("/api/payment", {
-//         method: "POST",
-//         headers: {
-//           "Content-Type": "application/json",
-//         },
-//         body: JSON.stringify({
-//           maintenanceId,
-//           amount,
-//           userId: userData?.userId,
-//         }),
-//       });
-  
-//       const data = await res.json();
-  
-//       if (data.id) {
-//         window.location.href = `https://checkout.stripe.com/pay/${data.id}`;
-//       } else {
-//         console.error("Payment initiation failed");
-//       }
-//     } catch (err) {
-//       console.error("Error:", err);
-//     }
-//   };
-  
-  
-//   const handleRejectVisitor = async (visitorId: string) => {
-//     try {
-//       const token = localStorage.getItem("token")
-//       const res = await fetch("http://localhost:5000/api/visitor/delete", {
-//         method: "DELETE",
-//         headers: {
-//           "Content-Type": "application/json",
-//           Authorization: `Bearer ${token}`
-//         },
-//         body: JSON.stringify({ visitorId })
-//       })
-//       if (!res.ok) throw new Error("Failed to reject visitor")
-//       setUserData((prev) =>
-//         prev
-//           ? {
-//               ...prev,
-//               Visitor: prev.Visitor.filter((v) => v.visitorId !== visitorId),
-//             }
-//           : null
-//       )
-//     } catch (err) {
-//       console.error(err)
-//     }
-//   }
-
-//   useEffect(() => {
-//     const fetchUser = async () => {
-//       try {
-//         const token = localStorage.getItem("token")
-//         if (!token) throw new Error("Token not found")
-
-//         const res = await fetch("http://localhost:5000/api/user/my", {
-//           headers: {
-//             Authorization: `Bearer ${token}`
-//           }
-//         })
-
-//         if (!res.ok) throw new Error("Failed to fetch user")
-
-//         const data = await res.json()
-//         setUserData(data)
-//       } catch (err) {
-//         console.error("Error fetching user:", err)
-//       } finally {
-//         setLoading(false)
-//       }
-//     }
-
-//     fetchUser()
-//   }, [])
-
-//   const unpaidMaintenance = userData?.room?.Maintenance?.filter(m => !m.paid) || []
-//   const activeVisitors = userData?.Visitor || []
-
-//   return (
-//     <div className="flex h-screen">
-//       <Sidebar userType="user" />
-
-//       <main className="flex-1 p-6 overflow-y-auto bg-background text-foreground">
-//         <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-
-//         {loading ? (
-//           <div className="grid gap-6 md:grid-cols-2">
-//             <Skeleton className="h-40 rounded-xl" />
-//             <Skeleton className="h-40 rounded-xl" />
-//           </div>
-//         ) : userData ? (
-//           <div className="grid gap-6 md:grid-cols-2">
-//             {/* Profile Card */}
-//             <Card>
-//               <CardHeader>
-//                 <CardTitle className="text-xl font-semibold">My Profile</CardTitle>
-//               </CardHeader>
-//               <Separator />
-//               <CardContent className="flex flex-col gap-6 p-6">
-//                 <div className="flex items-center gap-4">
-//                   <Avatar className="h-16 w-16">
-//                     <AvatarImage src={userData.profileUrl || ""} />
-//                     <AvatarFallback>
-//                       {userData.name
-//                         .split(" ")
-//                         .map((n) => n[0].toUpperCase())
-//                         .join("")}
-//                     </AvatarFallback>
-//                   </Avatar>
-//                   <div>
-//                     <p className="text-lg font-medium">{userData.name}</p>
-//                   </div>
-//                 </div>
-
-//                 <div className="grid grid-cols-2 gap-4 text-sm">
-//                   <div>
-//                     <Label className="text-muted-foreground">Phone Number</Label>
-//                     <p className="font-medium">{userData.number}</p>
-//                   </div>
-//                   <div>
-//                     <Label className="text-muted-foreground">Email</Label>
-//                     <p className="font-medium">{userData.email}</p>
-//                   </div>
-//                 </div>
-//               </CardContent>
-//             </Card>
-
-//             {/* Room Info Card */}
-//             <Card>
-//               <CardHeader>
-//                 <CardTitle className="text-xl font-semibold">Room Information</CardTitle>
-//               </CardHeader>
-//               <Separator />
-//               <CardContent className="p-6 space-y-4 text-sm">
-//                 <div className="grid grid-cols-2 gap-4">
-//                   <div>
-//                     <Label className="text-muted-foreground">Block</Label>
-//                     <p className="font-medium text-lg">{userData.room.block}</p>
-//                   </div>
-//                   <div>
-//                     <Label className="text-muted-foreground">Room No.</Label>
-//                     <p className="font-medium text-lg">{userData.room.room}</p>
-//                   </div>
-//                 </div>
-//               </CardContent>
-//             </Card>
-
-//             {/* Unpaid Maintenance Card */}
-//             <Card className={cn("border", unpaidMaintenance.length ? "border-red-500" : "")}>
-//               <CardHeader>
-//                 <CardTitle className="text-xl font-semibold text-red-600">Unpaid Maintenance</CardTitle>
-//               </CardHeader>
-//               <Separator />
-//               <CardContent className="p-6 space-y-2 text-sm">
-//                 {/* {unpaidMaintenance.length > 0 ? (
-//                   unpaidMaintenance.map((m) => (
-//                     <div key={m.maintenanceId} className="flex justify-between">
-//                       <p className="font-medium">{m.month} {m.year}</p>
-//                       <p className="font-semibold text-red-600">₹{m.amount}</p>
-//                     </div>
-//                   ))
-//                 ) : (
-//                   <p className="text-green-600 font-medium">No unpaid maintenance</p>
-//                 )} */}
-//                 {unpaidMaintenance.length > 0 ? (
-//                   unpaidMaintenance.map((m) => (
-//                     <div key={m.maintenanceId} className="flex justify-between items-center">
-//                       <div>
-//                         <p className="font-medium">{m.month} {m.year}</p>
-//                         <p className="font-semibold text-red-600">₹{m.amount}</p>
-//                       </div>
-//                       <Button onClick={() => handlePayMaintenance(m.maintenanceId, m.amount)} size="sm">
-//                         Pay Now
-//                       </Button>
-//                     </div>
-//                   ))
-//                 ) : (
-//                   <p className="text-green-600 font-medium">No unpaid maintenance</p>
-//                 )}
-//               </CardContent>
-//             </Card>
-
-//             {/* Current Visitors Card */}
-//             <Link href="/user/visitors">
-//               <Card className="rounded-2xl shadow-md border border-border bg-background transition hover:shadow-lg cursor-pointer">
-//                 <CardHeader className="pb-2">
-//                   <CardTitle className="text-lg font-bold text-foreground">Visitors</CardTitle>
-//                 </CardHeader>
-//                 <Separator />
-//                 <CardContent className="px-4 py-2">
-//                   <Table>
-//                     <TableHeader>
-//                       <TableRow>
-//                         <TableHead className="text-left text-muted-foreground">Name</TableHead>
-//                         <TableHead className="text-left text-muted-foreground">Purpose</TableHead>
-//                         <TableHead className="text-left text-muted-foreground">Phone Number</TableHead>
-//                         <TableHead className="text-left text-muted-foreground">Status</TableHead>
-//                       </TableRow>
-//                     </TableHeader>
-//                     <TableBody>
-//                       {activeVisitors.length > 0 ? (
-//                         activeVisitors.map((v) => (
-//                           <TableRow key={v.visitorId} className="transition rounded-lg">
-//                             <TableCell className="font-medium text-foreground">{v.name}</TableCell>
-//                             <TableCell className="text-muted-foreground">{v.purpose}</TableCell>
-//                             <TableCell className="text-foreground">{v.number}</TableCell>
-//                             <TableCell>
-//                               <span
-//                                 className={`font-semibold ${v.status ? "text-green-500" : "text-yellow-500"}`}
-//                               >
-//                                 {v.status ? "Inside" : "Pending"}
-//                               </span>
-//                             </TableCell>
-//                           </TableRow>
-//                         ))
-//                       ) : (
-//                         <TableRow>
-//                           <TableCell
-//                             colSpan={4}
-//                             className="text-center text-sm text-muted-foreground py-4"
-//                           >
-//                             No visitors currently inside.
-//                           </TableCell>
-//                         </TableRow>
-//                       )}
-//                     </TableBody>
-//                   </Table>
-//                 </CardContent>
-//               </Card>
-//             </Link>
-//             {/* <Card className="rounded-2xl shadow-md border border-border bg-background">
-//               <CardHeader className="pb-2">
-//                 <CardTitle className="text-lg font-bold text-foreground">Visitors</CardTitle>
-//               </CardHeader>
-//               <Separator />
-//               <CardContent className="px-4 py-2">
-//                 <Table>
-//                   <TableHeader>
-//                     <TableRow className="hover:bg-muted/50">
-//                       <TableHead className="text-left text-muted-foreground">Name</TableHead>
-//                       <TableHead className="text-left text-muted-foreground">Purpose</TableHead>
-//                       <TableHead className="text-left text-muted-foreground">Phone Number</TableHead>
-//                       <TableHead className="text-left text-muted-foreground">Status</TableHead>
-//                     </TableRow>
-//                   </TableHeader>
-//                   <TableBody>
-//                     {activeVisitors.length > 0 ? (
-//                       activeVisitors.map((v) => (
-//                         <TableRow
-//                           key={v.visitorId}
-//                           className="transition hover:bg-muted/30 rounded-lg"
-//                         >
-//                           <TableCell className="font-medium text-foreground">
-//                             {v.name}
-//                           </TableCell>
-//                           <TableCell className="text-muted-foreground">
-//                             {v.purpose}
-//                           </TableCell>
-//                           <TableCell className="font-medium text-foreground">
-//                             {v.number}
-//                           </TableCell>
-//                           <TableCell>
-//                             {v.status ? (
-//                               <span className="text-green-500 font-semibold">Inside</span>
-//                             ) : (
-//                               <div className="flex gap-2">
-//                                 <Button
-//                                   size="icon"
-//                                   variant="outline"
-//                                   className="h-8 w-8"
-//                                   onClick={() => handleApproveVisitor(v.visitorId)}
-//                                 >
-//                                   <Check className="h-4 w-4" />
-//                                 </Button>
-//                                 <Button
-//                                   size="icon"
-//                                   variant="destructive"
-//                                   className="h-8 w-8"
-//                                   onClick={() => handleRejectVisitor(v.visitorId)}
-//                                 >
-//                                   <X className="h-4 w-4" />
-//                                 </Button>
-//                               </div>
-//                             )}
-//                           </TableCell>
-//                         </TableRow>
-//                       ))
-//                     ) : (
-//                       <TableRow>
-//                         <TableCell
-//                           colSpan={3}
-//                           className="text-center text-sm text-muted-foreground py-4"
-//                         >
-//                           No visitors currently inside.
-//                         </TableCell>
-//                       </TableRow>
-//                     )}
-//                   </TableBody>
-//                 </Table>
-//               </CardContent>
-//             </Card> */}
-//             {/* <Card>
-//               <CardHeader>
-//                 <CardTitle className="text-xl font-semibold">Current Visitors Inside</CardTitle>
-//               </CardHeader>
-//               <Separator />
-//               <CardContent className="p-6 space-y-4 text-sm">
-//                 {activeVisitors.length > 0 ? (
-//                   activeVisitors.map((v) => (
-//                     <div key={v.visitorId} className="border p-3 rounded-xl space-y-1">
-//                       <p className="font-semibold text-base">{v.name}</p>
-//                       <p>Purpose: {v.purpose}</p>
-//                       <p>Phone: {v.number}</p>
-//                     </div>
-//                   ))
-//                 ) : (
-//                   <p className="text-muted-foreground">No visitors currently inside.</p>
-//                 )}
-//               </CardContent>
-//             </Card> */}
-//           </div>
-//         ) : (
-//           <p className="text-red-500">Failed to load user data.</p>
-//         )}
-//       </main>
-//     </div>
-//   )
-// }
