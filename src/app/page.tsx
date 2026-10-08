@@ -9,28 +9,18 @@ import {
   X,
   Check,
   Minus,
-  Sun,
-  Moon,
-  QrCode,
   BellRing,
   UserCheck,
-  Receipt,
-  Siren,
-  ShoppingBag,
-  Wrench,
   CheckCircle2,
-  Clock,
   Sparkles,
-  Play,
   RotateCcw,
   Utensils,
   Package,
   Car,
 } from "lucide-react";
-import { useTheme } from "next-themes";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
 const NAV_LINKS = [
   { label: "Features", href: "#features" },
@@ -88,6 +78,20 @@ const FEATURES = [
     title: "Verified Plumber & Laundry Partners",
     body: "Book society-vetted service partners with transparent standard rates, automated job tracking, and post-service payment settlement.",
     color: "teal",
+  },
+  {
+    number: "07",
+    tag: "Engagement",
+    title: "Good Neighbour Points",
+    body: "Residents earn points and badges for paying on time, pre-approving guests and reviewing services — with a flat and tower leaderboard.",
+    color: "amber",
+  },
+  {
+    number: "08",
+    tag: "Committee",
+    title: "Society Analytics",
+    body: "Gate traffic by purpose, peak hours, maintenance collection rates and service-partner performance for the RWA committee.",
+    color: "blue",
   },
 ];
 
@@ -184,21 +188,6 @@ const PLANS = [
   },
 ];
 
-function ThemeToggleBtn() {
-  const { theme, setTheme } = useTheme();
-  const isDark = theme === "dark";
-  return (
-    <button
-      onClick={() => setTheme(isDark ? "light" : "dark")}
-      className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-800/80 transition-all"
-      title="Toggle theme"
-    >
-      <Sun className="w-4 h-4 block dark:hidden text-amber-500" />
-      <Moon className="w-4 h-4 hidden dark:block text-blue-400" />
-    </button>
-  );
-}
-
 export default function HomePage() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [activeRole, setActiveRole] = useState(0);
@@ -257,7 +246,7 @@ export default function HomePage() {
           </nav>
 
           <div className="hidden md:flex items-center gap-3">
-            <ThemeToggleBtn />
+            <ThemeToggle />
             <Link
               href="/login"
               className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-900 transition"
@@ -273,7 +262,7 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:hidden">
-            <ThemeToggleBtn />
+            <ThemeToggle />
             <button
               className="p-1.5 rounded-lg text-zinc-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-900"
               onClick={() => setMobileOpen((v) => !v)}
@@ -564,7 +553,7 @@ export default function HomePage() {
           </h2>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {FEATURES.map((f) => (
             <div
               key={f.number}

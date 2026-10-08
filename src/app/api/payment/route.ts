@@ -3,11 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import Razorpay from "razorpay";
 import crypto from "crypto";
 
-// Initialize Razorpay instance
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY!,
-  key_secret: process.env.RAZORPAY_SECRET!,
-});
+// Created lazily so a missing key gives a clear 500 instead of crashing the route at import time.
+let razorpay: Razorpay | null = null;
+function getRazorpay() {
+  if (!process.env.RAZORPAY_KEY || !process.env.RAZORPAY_SECRET) {
+    throw new Error("Razorpay is not configured (set RAZORPAY_KEY and RAZORPAY_SECRET)");
+  }
+  razorpay ??= new Razorpay({ key_id: process.env.RAZORPAY_KEY, key_secret: process.env.RAZORPAY_SECRET });
+  return razorpay;
+}
+
+const message = (err: unknown) => (err instanceof Error ? err.message : "Unknown error");
 
 // In app/api/payment/route.ts
 export async function POST(req: NextRequest) {
@@ -33,7 +39,7 @@ export async function POST(req: NextRequest) {
         },
       };
   
-      const order = await razorpay.orders.create(options);
+      const order = await getRazorpay().orders.create(options);
   
       return NextResponse.json({
         id: order.id,
@@ -41,9 +47,9 @@ export async function POST(req: NextRequest) {
         currency: order.currency,
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY,
       });
-    } catch (err: any) {
-      console.error("Razorpay Error:", err.message);
-      return NextResponse.json({ error: err.message }, { status: 500 });
+    } catch (err: unknown) {
+      console.error("Razorpay Error:", message(err));
+      return NextResponse.json({ error: message(err) }, { status: 500 });
     }
   }
 // Add a verification endpoint for Razorpay webhooks
@@ -52,8 +58,9 @@ export async function PUT(req: NextRequest) {
     const body = await req.json();
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
 
+    if (!process.env.RAZORPAY_SECRET) throw new Error("Razorpay is not configured");
     const generatedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_SECRET!)
+      .createHmac("sha256", process.env.RAZORPAY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
@@ -71,8 +78,8 @@ export async function PUT(req: NextRequest) {
         message: "Payment verification failed" 
       }, { status: 400 });
     }
-  } catch (err: any) {
-    console.error("Verification Error:", err.message);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    console.error("Verification Error:", message(err));
+    return NextResponse.json({ error: message(err) }, { status: 500 });
   }
 }

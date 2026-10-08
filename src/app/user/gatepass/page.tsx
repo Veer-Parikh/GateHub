@@ -1,356 +1,377 @@
 "use client";
 
-import React, { useState } from "react";
-import { Sidebar } from "@/components/sidebar";
-import {
-  QrCode,
-  Share2,
-  Copy,
-  Clock,
-  ShieldCheck,
-  CheckCircle2,
-  Trash2,
-  Car,
-} from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Car, CheckCircle2, Clock, Copy, ExternalLink, QrCode, Share2, ShieldCheck, Trash2 } from "lucide-react";
+import { AppShell } from "@/components/app-shell";
+import { EmptyState, PageHeader, Panel } from "@/components/page";
+import { PassStatusPill, Pill } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useNow } from "@/hooks/use-now";
+import { createPass, passStatus, revokePass } from "@/lib/actions";
+import { countdown, friendlyDateTime } from "@/lib/format";
+import { pointsToast } from "@/lib/notify";
+import { useDemoState } from "@/lib/store";
+import { cn } from "@/lib/utils";
+import type { GatePass, PassType } from "@/lib/types";
 
-interface GatePass {
-  passId: string;
-  guestName: string;
-  guestPhone: string;
-  pin: string;
-  validityHours: number;
-  entryType: "Guest" | "Delivery" | "Cab" | "Service";
-  vehicleNumber?: string;
-  createdAt: string;
-  expiresAt: string;
-  flat: string;
+const VALIDITY = [
+  { value: "1", label: "1 hour" },
+  { value: "2", label: "2 hours" },
+  { value: "4", label: "4 hours" },
+  { value: "8", label: "8 hours" },
+  { value: "24", label: "24 hours" },
+];
+
+function shareText(p: GatePass, society: string) {
+  return [
+    `NexGate gate pass — ${society}`,
+    `Guest: ${p.guestName}`,
+    `Host flat: ${p.block}-${p.flat}`,
+    `Entry PIN: ${p.pin}`,
+    `Valid until: ${friendlyDateTime(p.expiresAt)}`,
+    "",
+    "Show this PIN to the guard at the main gate.",
+  ].join("\n");
 }
 
-export default function DigitalGatePassPage() {
-  const [guestName, setGuestName] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
-  const [entryType, setEntryType] = useState<"Guest" | "Delivery" | "Cab" | "Service">("Guest");
-  const [validityHours, setValidityHours] = useState("4");
-  const [vehicleNumber, setVehicleNumber] = useState("");
-  const [activePasses, setActivePasses] = useState<GatePass[]>([
-    {
-      passId: "GP-9401",
-      guestName: "Arjun Verma & Family",
-      guestPhone: "9876501234",
-      pin: "482019",
-      validityHours: 6,
-      entryType: "Guest",
-      vehicleNumber: "KA-03-NB-4412",
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 6 * 3600000).toISOString(),
-      flat: "Block A - Flat 302",
-    },
-    {
-      passId: "GP-8832",
-      guestName: "Amazon Prime Express Delivery",
-      guestPhone: "9812345678",
-      pin: "194022",
-      validityHours: 2,
-      entryType: "Delivery",
-      createdAt: new Date(Date.now() - 30 * 60000).toISOString(),
-      expiresAt: new Date(Date.now() + 90 * 60000).toISOString(),
-      flat: "Block A - Flat 302",
-    },
-  ]);
+export default function GatePassPage() {
+  return (
+    <AppShell>
+      <GatePasses />
+    </AppShell>
+  );
+}
 
-  const handleGeneratePass = (e: React.FormEvent) => {
+function GatePasses() {
+  const now = useNow(10_000);
+  const state = useDemoState();
+  const { resident } = state;
+  const [form, setForm] = useState({ guestName: "", guestPhone: "", entryType: "Guest" as PassType, validity: "4", vehicleNo: "" });
+  const [touched, setTouched] = useState(false);
+  const [justCreated, setJustCreated] = useState<string | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
+  const [tab, setTab] = useState<"active" | "past">("active");
+
+  const phoneDigits = form.guestPhone.replace(/\D/g, "");
+  const errors = {
+    guestName: form.guestName.trim().length < 2 ? "Enter the guest's name" : null,
+    guestPhone: phoneDigits && phoneDigits.length !== 10 ? "Use a 10-digit mobile number" : null,
+  };
+  const valid = !errors.guestName && !errors.guestPhone;
+
+  const passes = state.passes.filter((p) => p.block === resident.block && p.flat === resident.flat);
+  const active = passes.filter((p) => passStatus(p, now) === "active");
+  const past = passes.filter((p) => passStatus(p, now) !== "active");
+  const created = passes.find((p) => p.passId === justCreated);
+
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!guestName.trim()) {
-      toast.error("Please enter guest name");
-      return;
-    }
-
-    const randomPin = Math.floor(100000 + Math.random() * 900000).toString();
-    const hours = parseInt(validityHours) || 4;
-    const now = new Date();
-    const expires = new Date(now.getTime() + hours * 3600000);
-
-    const newPass: GatePass = {
-      passId: "GP-" + Math.floor(1000 + Math.random() * 9000),
-      guestName: guestName.trim(),
-      guestPhone: guestPhone.trim() || "N/A",
-      pin: randomPin,
-      validityHours: hours,
-      entryType,
-      vehicleNumber: vehicleNumber.trim() || undefined,
-      createdAt: now.toISOString(),
-      expiresAt: expires.toISOString(),
-      flat: "Block A - Flat 302",
-    };
-
-    setActivePasses([newPass, ...activePasses]);
-    toast.success("Gate pass generated", {
-      description: `PIN ${randomPin} valid for ${hours} hours.`,
+    setTouched(true);
+    if (!valid) return;
+    const { pass, points } = createPass({
+      guestName: form.guestName,
+      guestPhone: phoneDigits || undefined,
+      entryType: form.entryType,
+      validityHours: Number(form.validity),
+      vehicleNo: form.vehicleNo,
     });
-
-    setGuestName("");
-    setGuestPhone("");
-    setVehicleNumber("");
+    setJustCreated(pass.passId);
+    setTab("active");
+    setForm({ guestName: "", guestPhone: "", entryType: form.entryType, validity: form.validity, vehicleNo: "" });
+    setTouched(false);
+    toast.success(`Pass ${pass.passId} created`, { description: `PIN ${pass.pin} — valid for ${form.validity}h.` });
+    pointsToast(points, "Pre-approved a visitor");
   };
 
-  const handleCopyPass = (pass: GatePass) => {
-    const text = `NexGate Digital Pass\nHost: ${pass.flat}\nGuest: ${pass.guestName}\nGate PIN: ${pass.pin}\nValid for: ${pass.validityHours} Hours\nPresent this PIN at the security gate terminal for clearance.`;
-    navigator.clipboard.writeText(text);
-    toast.success("Pass copied to clipboard");
+  const copy = async (p: GatePass) => {
+    try {
+      await navigator.clipboard.writeText(shareText(p, resident.society));
+      toast.success("Pass details copied");
+    } catch {
+      toast.error("Clipboard not available");
+    }
   };
 
-  const handleShareWhatsApp = (pass: GatePass) => {
-    const text = encodeURIComponent(
-      `NexGate Pass Invite\n\nGuest: ${pass.guestName}\nHost: ${pass.flat}\nEntry PIN: ${pass.pin}\nValid until: ${new Date(pass.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}\n\nPresent this PIN to security at the gate.`
-    );
-    window.open(`https://wa.me/?text=${text}`, "_blank");
-  };
-
-  const handleDeletePass = (passId: string) => {
-    setActivePasses(activePasses.filter((p) => p.passId !== passId));
-    toast.info("Gate pass revoked");
+  const share = (p: GatePass) => {
+    const url = `https://wa.me/${p.guestPhone ? `91${p.guestPhone}` : ""}?text=${encodeURIComponent(shareText(p, resident.society))}`;
+    window.open(url, "_blank", "noopener");
   };
 
   return (
-    <div className="flex h-screen bg-[#fafafa] dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <Sidebar userType="user" />
+    <>
+      <PageHeader
+        title="Gate passes"
+        description="Pre-approve expected visitors with a one-time PIN. The guard verifies it and lets them straight in."
+        actions={
+          <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+            <a href="/security" target="_blank" rel="noopener">
+              Try it at the guard console <ExternalLink className="ml-1 h-3.5 w-3.5" />
+            </a>
+          </Button>
+        }
+      />
 
-      <main className="flex-1 overflow-y-auto w-full max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-[-0.03em]">Digital Gate Pass</h1>
-              <Badge variant="outline" className="text-xs">
-                Direct Clearance
-              </Badge>
-            </div>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-              Issue fast-entry PINs for expected visitors, deliveries, and cabs.
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+        <div className="space-y-4 lg:col-span-5">
+          <Panel title="Issue a pass" description={`For ${resident.block}-${resident.flat}`}>
+            <form onSubmit={submit} className="space-y-4" noValidate>
+              <div className="space-y-1.5">
+                <Label htmlFor="gp-name" className="text-xs">Guest name</Label>
+                <Input
+                  id="gp-name"
+                  placeholder="e.g. Kavya & family, Amazon delivery"
+                  value={form.guestName}
+                  onChange={(e) => setForm({ ...form, guestName: e.target.value })}
+                  aria-invalid={touched && !!errors.guestName}
+                />
+                {touched && errors.guestName && <p className="text-xs text-red-600">{errors.guestName}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="gp-phone" className="text-xs">
+                  Guest mobile <span className="font-normal text-zinc-400">(optional — lets you share on WhatsApp)</span>
+                </Label>
+                <Input
+                  id="gp-phone"
+                  type="tel"
+                  inputMode="numeric"
+                  placeholder="98765 43210"
+                  value={form.guestPhone}
+                  onChange={(e) => setForm({ ...form, guestPhone: e.target.value })}
+                  aria-invalid={touched && !!errors.guestPhone}
+                />
+                {touched && errors.guestPhone && <p className="text-xs text-red-600">{errors.guestPhone}</p>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Category</Label>
+                  <Select value={form.entryType} onValueChange={(v: PassType) => setForm({ ...form, entryType: v })}>
+                    <SelectTrigger aria-label="Category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(["Guest", "Delivery", "Cab", "Service"] as PassType[]).map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Valid for</Label>
+                  <Select value={form.validity} onValueChange={(v) => setForm({ ...form, validity: v })}>
+                    <SelectTrigger aria-label="Valid for">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {VALIDITY.map((v) => (
+                        <SelectItem key={v.value} value={v.value}>
+                          {v.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="gp-vehicle" className="text-xs">
+                  Vehicle number <span className="font-normal text-zinc-400">(optional)</span>
+                </Label>
+                <Input
+                  id="gp-vehicle"
+                  placeholder="KA-01-AB-1234"
+                  value={form.vehicleNo}
+                  onChange={(e) => setForm({ ...form, vehicleNo: e.target.value.toUpperCase() })}
+                  className="font-mono"
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={touched && !valid}>
+                <QrCode className="mr-1.5 h-4 w-4" /> Generate pass
+              </Button>
+            </form>
+          </Panel>
+
+          <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-100/60 p-4 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+            <p className="flex items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
+              <ShieldCheck className="h-4 w-4" /> How passes work
             </p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>Generate a pass and share the 6-digit PIN with your guest.</li>
+              <li>The guard enters the PIN at the gate — no call to your flat needed.</li>
+              <li>Each PIN works once and expires automatically. You&apos;ll get a notification when it&apos;s used.</li>
+            </ol>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Form */}
-          <div className="lg:col-span-5 space-y-6">
-            <Card className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">
-                  Issue Pass
-                </CardTitle>
-                <CardDescription>
-                  Pre-approve entry for visitors.
-                </CardDescription>
-              </CardHeader>
-              <form onSubmit={handleGeneratePass}>
-                <CardContent className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-zinc-500 dark:text-zinc-400">Guest Name</Label>
-                    <Input
-                      required
-                      placeholder="e.g. Vikram Seth"
-                      value={guestName}
-                      onChange={(e) => setGuestName(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-zinc-500 dark:text-zinc-400">Phone (Optional)</Label>
-                    <Input
-                      type="tel"
-                      placeholder="e.g. 9876543210"
-                      value={guestPhone}
-                      onChange={(e) => setGuestPhone(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-zinc-500 dark:text-zinc-400">Category</Label>
-                      <Select
-                        value={entryType}
-                        onValueChange={(val: "Guest" | "Delivery" | "Cab" | "Service") => setEntryType(val)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Guest">Guest</SelectItem>
-                          <SelectItem value="Delivery">Delivery</SelectItem>
-                          <SelectItem value="Cab">Cab</SelectItem>
-                          <SelectItem value="Service">Service</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-zinc-500 dark:text-zinc-400">Validity</Label>
-                      <Select
-                        value={validityHours}
-                        onValueChange={setValidityHours}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="2">2 Hours</SelectItem>
-                          <SelectItem value="4">4 Hours</SelectItem>
-                          <SelectItem value="8">8 Hours</SelectItem>
-                          <SelectItem value="24">24 Hours</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-zinc-500 dark:text-zinc-400">Vehicle Number (Optional)</Label>
-                    <Input
-                      placeholder="e.g. KA-01-AB-1234"
-                      value={vehicleNumber}
-                      onChange={(e) => setVehicleNumber(e.target.value)}
-                    />
-                  </div>
-                </CardContent>
-                <CardFooter className="pt-2">
-                  <Button type="submit" className="w-full bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200">
-                    Generate Pass
-                  </Button>
-                </CardFooter>
-              </form>
-            </Card>
-
-            <div className="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs space-y-1.5">
-              <div className="flex items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
-                <ShieldCheck className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
-                Verified Gate Access
+        <div className="space-y-4 lg:col-span-7">
+          {created && passStatus(created, now) === "active" && (
+            <div className="rounded-lg border-2 border-emerald-500/70 bg-white p-5 dark:bg-zinc-900">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                    <CheckCircle2 className="h-4 w-4" /> Pass ready to share
+                  </p>
+                  <p className="mt-1 text-lg font-semibold">{created.guestName}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {created.entryType} · valid until {friendlyDateTime(created.expiresAt)}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setJustCreated(null)} className="text-xs text-zinc-400 hover:text-zinc-700" aria-label="Dismiss">
+                  Dismiss
+                </button>
               </div>
-              <p className="text-zinc-500 dark:text-zinc-400">
-                Security terminals verify the 6-digit PIN instantly. Clearance logs are recorded automatically.
-              </p>
+              <p className="my-4 text-center font-mono text-4xl font-bold tracking-[0.3em] sm:text-5xl">{created.pin}</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button size="sm" onClick={() => share(created)} className="h-8 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-700">
+                  <Share2 className="h-3.5 w-3.5" /> Share on WhatsApp
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => copy(created)} className="h-8 gap-1.5 text-xs">
+                  <Copy className="h-3.5 w-3.5" /> Copy details
+                </Button>
+              </div>
             </div>
+          )}
+
+          <div className="flex items-center gap-1.5" role="tablist">
+            {(
+              [
+                ["active", `Active (${active.length})`],
+                ["past", `Used & expired (${past.length})`],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => setTab(id)}
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                  tab === id
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400",
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {/* Active Passes Showcase */}
-          <div className="lg:col-span-7 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold tracking-tight">Active Passes ({activePasses.length})</h2>
-              <span className="text-xs text-zinc-400">Synced with Gate Consoles</span>
-            </div>
-
-            {activePasses.length === 0 ? (
-              <Card className="p-8 text-center border-dashed bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-                <QrCode className="w-8 h-8 mx-auto text-zinc-400 mb-2" />
-                <p className="font-medium text-sm text-zinc-700 dark:text-zinc-300">No active passes</p>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                  Generated passes will show here.
-                </p>
-              </Card>
+          {tab === "active" &&
+            (active.length === 0 ? (
+              <EmptyState icon={QrCode} title="No active passes" description="Passes you generate appear here with a live countdown until they're used or expire." />
             ) : (
-              <div className="space-y-3">
-                {activePasses.map((pass) => (
-                  <div
-                    key={pass.passId}
-                    className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 space-y-4"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs text-zinc-400">{pass.passId}</span>
-                          <Badge variant="outline" className="text-[10px]">
-                            {pass.entryType}
-                          </Badge>
+              <ul className="space-y-3">
+                {active.map((p) => {
+                  const total = new Date(p.expiresAt).getTime() - new Date(p.createdAt).getTime();
+                  const left = new Date(p.expiresAt).getTime() - now;
+                  return (
+                    <li key={p.passId} className="space-y-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-[11px] text-zinc-400">{p.passId}</span>
+                            <Pill>{p.entryType}</Pill>
+                          </div>
+                          <p className="mt-1 truncate font-semibold">{p.guestName}</p>
+                          <p className="flex flex-wrap items-center gap-x-3 text-xs text-zinc-500 dark:text-zinc-400">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" /> {countdown(p.expiresAt, now)}
+                            </span>
+                            {p.vehicleNo && (
+                              <span className="flex items-center gap-1 font-mono">
+                                <Car className="h-3 w-3" /> {p.vehicleNo}
+                              </span>
+                            )}
+                          </p>
                         </div>
-                        <h3 className="text-base font-semibold mt-1">{pass.guestName}</h3>
-                        <p className="text-xs text-zinc-400">{pass.flat}</p>
+                        <div className="shrink-0 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-center dark:border-zinc-700 dark:bg-zinc-800">
+                          <span className="block text-[9px] font-semibold uppercase tracking-wider text-zinc-400">PIN</span>
+                          <span className="font-mono text-xl font-bold tracking-wider">{p.pin}</span>
+                        </div>
                       </div>
+                      <Progress value={Math.max(0, (left / total) * 100)} className="h-1" aria-label="Time remaining" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={() => share(p)} className="h-7 gap-1 text-xs">
+                          <Share2 className="h-3 w-3" /> Share
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => copy(p)} className="h-7 gap-1 text-xs">
+                          <Copy className="h-3 w-3" /> Copy
+                        </Button>
+                        {confirmRevoke === p.passId ? (
+                          <span className="ml-auto flex items-center gap-1.5 text-xs">
+                            Revoke this pass?
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="h-7 text-xs"
+                              onClick={() => {
+                                revokePass(p.passId);
+                                setConfirmRevoke(null);
+                                toast("Pass revoked", { description: `PIN ${p.pin} will no longer open the gate.` });
+                              }}
+                            >
+                              Revoke
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setConfirmRevoke(null)}>
+                              Keep
+                            </Button>
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setConfirmRevoke(p.passId)}
+                            className="ml-auto h-7 gap-1 text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                          >
+                            <Trash2 className="h-3 w-3" /> Revoke
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ))}
 
-                      {/* PIN Callout box */}
-                      <div className="bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md px-3.5 py-1.5 text-center">
-                        <span className="text-[9px] uppercase font-semibold text-zinc-400 block tracking-wider">PIN</span>
-                        <span className="font-mono text-xl font-bold tracking-wider text-zinc-900 dark:text-zinc-100">
-                          {pass.pin}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3 text-xs bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800">
-                      <div>
-                        <span className="text-zinc-400 text-[10px] block">Valid Until</span>
-                        <span className="font-medium flex items-center gap-1 text-zinc-700 dark:text-zinc-300 mt-0.5">
-                          <Clock className="w-3 h-3 text-zinc-400" />
-                          {new Date(pass.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400 text-[10px] block">Vehicle</span>
-                        <span className="font-medium flex items-center gap-1 text-zinc-700 dark:text-zinc-300 mt-0.5">
-                          <Car className="w-3 h-3 text-zinc-400" />
-                          {pass.vehicleNumber || "None"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400 text-[10px] block">Status</span>
-                        <span className="font-medium flex items-center gap-1 text-zinc-900 dark:text-zinc-100 mt-0.5">
-                          <CheckCircle2 className="w-3 h-3 text-zinc-600 dark:text-zinc-400" /> Authorized
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleShareWhatsApp(pass)}
-                        className="text-xs h-7 gap-1"
-                      >
-                        <Share2 className="w-3 h-3" /> Share
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleCopyPass(pass)}
-                        className="text-xs h-7 gap-1"
-                      >
-                        <Copy className="w-3 h-3" /> Copy
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDeletePass(pass.passId)}
-                        className="text-xs h-7 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 ml-auto"
-                      >
-                        <Trash2 className="w-3 h-3" /> Revoke
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          {tab === "past" &&
+            (past.length === 0 ? (
+              <EmptyState icon={Clock} title="No past passes" description="Used, expired and revoked passes are kept here." />
+            ) : (
+              <Panel bodyClassName="p-0">
+                <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {past.map((p) => {
+                    const status = passStatus(p, now);
+                    return (
+                      <li key={p.passId} className="flex items-center justify-between gap-3 px-4 py-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{p.guestName}</p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            <span className="font-mono">{p.passId}</span> · {p.entryType} ·{" "}
+                            {status === "used"
+                              ? `entered ${friendlyDateTime(p.usedAt!)}`
+                              : status === "revoked"
+                                ? `revoked ${friendlyDateTime(p.revokedAt!)}`
+                                : `expired ${friendlyDateTime(p.expiresAt)}`}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="hidden font-mono text-xs text-zinc-400 line-through sm:inline">{p.pin}</span>
+                          <PassStatusPill status={status} />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Panel>
+            ))}
         </div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }

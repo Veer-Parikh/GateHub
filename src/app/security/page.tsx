@@ -1,870 +1,705 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import {
-  Shield,
-  UserCheck,
-  Clock,
-  Search,
-  Plus,
-  CheckCircle2,
-  XCircle,
-  Phone,
-  QrCode,
-  LogOut,
-  RefreshCw,
-  Camera,
-  Flame,
-  Activity,
-  Check,
-  Sun,
-  Moon,
-} from "lucide-react";
-import { useTheme } from "next-themes";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import Link from "next/link";
+import {
+  AlertTriangle,
+  Bell,
+  BellOff,
+  Check,
+  CheckCircle2,
+  Clock,
+  KeyRound,
+  LogIn,
+  LogOut,
+  Phone,
+  Plus,
+  Search,
+  Shield,
+  Siren,
+  UserCheck,
+  X,
+  XCircle,
+} from "lucide-react";
+import { ConsoleShell } from "@/components/app-shell";
+import { EmptyState, Panel, StatCard } from "@/components/page";
+import { Pill, VisitorStatusPill } from "@/components/status";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useNow } from "@/hooks/use-now";
+import { useNewItems } from "@/hooks/use-new-items";
+import {
+  acknowledgeSos,
+  activeSos,
+  checkoutVisitor,
+  guardDecide,
+  passStatus,
+  registerVisitor,
+  resolveSos,
+  verifyPin,
+  visitorLabel,
+  type VerifyResult,
+} from "@/lib/actions";
+import { clock, friendlyDateTime, initials, timeAgo } from "@/lib/format";
+import { BLOCKS, demoFlats } from "@/lib/seed";
+import { PERSONAS, useSession } from "@/lib/session";
+import { useDemoState } from "@/lib/store";
+import { cn } from "@/lib/utils";
+import type { SosAlert, Visitor, VisitorPurpose } from "@/lib/types";
 
-interface VisitorEntry {
-  visitorId: string;
-  name: string;
-  age?: number;
-  address?: string;
-  purpose: string;
-  number: number | string;
-  status: boolean;
-  hasLeft: boolean;
-  createdAt: string;
-  updatedAt: string;
-  vehicleNo?: string;
-  roomId?: string;
-  room?: {
-    block: string;
-    room: string;
-  };
+const PURPOSES: VisitorPurpose[] = ["Guest", "Delivery", "Cab", "Service", "Daily Help"];
+const FLATS = demoFlats();
+/** How long a visitor can stay before the console flags them, by purpose. */
+const OVERSTAY_MIN: Record<VisitorPurpose, number> = { Delivery: 30, Cab: 20, Service: 240, Guest: 480, "Daily Help": 600 };
+
+const isToday = (iso?: string) => !!iso && new Date(iso).toDateString() === new Date().toDateString();
+
+/** Short two-tone alarm. Browsers may block audio until the guard has clicked somewhere — that's fine. */
+function playAlarm(ctxRef: React.MutableRefObject<AudioContext | null>) {
+  try {
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    ctxRef.current ??= new Ctx();
+    const ctx = ctxRef.current;
+    void ctx.resume();
+    [0, 0.35, 0.7, 1.05].forEach((t, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = i % 2 ? 660 : 880;
+      gain.gain.setValueAtTime(0.06, ctx.currentTime + t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + t);
+      osc.stop(ctx.currentTime + t + 0.32);
+    });
+  } catch {
+    // audio unavailable
+  }
 }
 
-export default function SecurityGuardConsole() {
-  const [visitors, setVisitors] = useState<VisitorEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedPurpose, setSelectedPurpose] = useState("all");
-  const [passPin, setPassPin] = useState("");
-  const [isVerifyPassOpen, setIsVerifyPassOpen] = useState(false);
-  const [isAddOpen, setIsAddOpen] = useState(false);
-  const [sirenActive, setSirenActive] = useState(false);
-  const [sosDetails, setSosDetails] = useState<string | null>(null);
-
-  const { theme, setTheme } = useTheme();
-
-  const [newVisitor, setNewVisitor] = useState({
-    name: "",
-    age: "",
-    address: "",
-    purpose: "Guest",
-    number: "",
-    vehicleNo: "",
-    block: "A",
-    flat: "",
-  });
-
-  const checkEmergencyStatus = useCallback(() => {
-    try {
-      const sosData = localStorage.getItem("nexgate_emergency_sos");
-      if (sosData) {
-        const parsed = JSON.parse(sosData);
-        setSirenActive(true);
-        setSosDetails(`ALERT: ${parsed.type?.toUpperCase()} reported at Block ${parsed.block} - Flat ${parsed.flat}`);
-      } else {
-        setSirenActive(false);
-        setSosDetails(null);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const fetchVisitors = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("http://localhost:5000/api/visitor/notified");
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setVisitors(data);
-          setLoading(false);
-          return;
-        }
-      }
-    } catch {
-      // use local seed
-    }
-
-    const cached = localStorage.getItem("nexgate_visitors");
-    if (cached) {
-      try {
-        setVisitors(JSON.parse(cached));
-        setLoading(false);
-        return;
-      } catch {
-        // ignore
-      }
-    }
-
-    const defaultSeed: VisitorEntry[] = [
-      {
-        visitorId: "v-001",
-        name: "Rahul Deshmukh",
-        purpose: "Guest",
-        number: "9820011223",
-        status: true,
-        hasLeft: false,
-        createdAt: new Date(Date.now() - 45 * 60000).toISOString(),
-        updatedAt: new Date(Date.now() - 40 * 60000).toISOString(),
-        vehicleNo: "KA-01-MJ-9912",
-        room: { block: "A", room: "302" },
-      },
-      {
-        visitorId: "v-002",
-        name: "Swiggy Delivery Partner",
-        purpose: "Delivery",
-        number: "9877112233",
-        status: true,
-        hasLeft: false,
-        createdAt: new Date(Date.now() - 15 * 60000).toISOString(),
-        updatedAt: new Date(Date.now() - 10 * 60000).toISOString(),
-        vehicleNo: "KA-03-EX-1011",
-        room: { block: "B", room: "501" },
-      },
-      {
-        visitorId: "v-003",
-        name: "Urban Company AC Technician",
-        purpose: "Service",
-        number: "9812345000",
-        status: false,
-        hasLeft: false,
-        createdAt: new Date(Date.now() - 3 * 60000).toISOString(),
-        updatedAt: new Date().toISOString(),
-        vehicleNo: "KA-05-SR-2200",
-        room: { block: "C", room: "204" },
-      },
-      {
-        visitorId: "v-004",
-        name: "Uber Premier",
-        purpose: "Cab",
-        number: "9900112244",
-        status: true,
-        hasLeft: true,
-        createdAt: new Date(Date.now() - 120 * 60000).toISOString(),
-        updatedAt: new Date(Date.now() - 90 * 60000).toISOString(),
-        vehicleNo: "KA-51-AB-7788",
-        room: { block: "A", room: "102" },
-      },
-    ];
-
-    setVisitors(defaultSeed);
-    localStorage.setItem("nexgate_visitors", JSON.stringify(defaultSeed));
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchVisitors();
-    checkEmergencyStatus();
-    const interval = setInterval(checkEmergencyStatus, 4000);
-    return () => clearInterval(interval);
-  }, [fetchVisitors, checkEmergencyStatus]);
-
-  const handleApproveEntry = (visitorId: string) => {
-    const updated = visitors.map((v) =>
-      v.visitorId === visitorId ? { ...v, status: true, updatedAt: new Date().toISOString() } : v
-    );
-    setVisitors(updated);
-    localStorage.setItem("nexgate_visitors", JSON.stringify(updated));
-    toast.success("Visitor Entry Approved — Boom Barrier Opened");
-  };
-
-  const handleMarkExit = (visitorId: string) => {
-    const updated = visitors.map((v) =>
-      v.visitorId === visitorId ? { ...v, hasLeft: true, updatedAt: new Date().toISOString() } : v
-    );
-    setVisitors(updated);
-    localStorage.setItem("nexgate_visitors", JSON.stringify(updated));
-    toast.info("Visitor Checked Out — Departure Logged");
-  };
-
-  const handleVerifyPass = () => {
-    if (!passPin || passPin.trim().length < 4) {
-      toast.error("Please enter a valid 4 to 6-digit gate code");
-      return;
-    }
-
-    const pin = passPin.trim();
-    let guestName = `Visitor (PIN ${pin})`;
-    let targetRoom = { block: "A", room: "304" };
-    let purpose = "Guest";
-
-    try {
-      const storedPasses = localStorage.getItem("nexgate_gatepasses");
-      if (storedPasses) {
-        const passes = JSON.parse(storedPasses);
-        const matched = passes.find((p: any) => p.pin === pin);
-        if (matched) {
-          guestName = matched.guestName;
-          purpose = matched.entryType || "Guest";
-        }
-      }
-    } catch {
-      // fallback
-    }
-
-    const newEntry: VisitorEntry = {
-      visitorId: `v-${Date.now()}`,
-      name: guestName,
-      purpose: purpose,
-      number: "PIN Verified Pass",
-      status: true,
-      hasLeft: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      room: targetRoom,
-    };
-
-    const updated = [newEntry, ...visitors];
-    setVisitors(updated);
-    localStorage.setItem("nexgate_visitors", JSON.stringify(updated));
-
-    toast.success("Gate Pass Verified — Boom Barrier Lifted", {
-      description: `PIN ${pin} verified for ${guestName} (Flat A-304).`,
-    });
-    setPassPin("");
-    setIsVerifyPassOpen(false);
-  };
-
-  const handleRegisterVisitor = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newVisitor.name || !newVisitor.number || !newVisitor.flat) {
-      toast.error("Please fill required fields (Name, Phone, Flat)");
-      return;
-    }
-
-    const entry: VisitorEntry = {
-      visitorId: `v-${Date.now()}`,
-      name: newVisitor.name,
-      age: parseInt(newVisitor.age) || undefined,
-      address: newVisitor.address,
-      purpose: newVisitor.purpose,
-      number: newVisitor.number,
-      status: false,
-      hasLeft: false,
-      vehicleNo: newVisitor.vehicleNo || undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      room: {
-        block: newVisitor.block,
-        room: newVisitor.flat,
-      },
-    };
-
-    const updated = [entry, ...visitors];
-    setVisitors(updated);
-    localStorage.setItem("nexgate_visitors", JSON.stringify(updated));
-
-    toast.success("Visitor Logged at Gate Desk", {
-      description: `Notification sent to Block ${newVisitor.block} - Flat ${newVisitor.flat}`,
-    });
-
-    setNewVisitor({
-      name: "",
-      age: "",
-      address: "",
-      purpose: "Guest",
-      number: "",
-      vehicleNo: "",
-      block: "A",
-      flat: "",
-    });
-    setIsAddOpen(false);
-  };
-
-  const insideCommunityList = visitors.filter((v) => v.status && !v.hasLeft);
-  const waitingApprovalList = visitors.filter((v) => !v.status && !v.hasLeft);
-  const departedList = visitors.filter((v) => v.hasLeft);
-
-  const filteredInside = insideCommunityList.filter((v) => {
-    const matchesSearch =
-      v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (v.room && `${v.room.block}-${v.room.room}`.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (v.vehicleNo && v.vehicleNo.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesPurpose =
-      selectedPurpose === "all" || v.purpose.toLowerCase() === selectedPurpose.toLowerCase();
-    return matchesSearch && matchesPurpose;
-  });
+export default function SecurityConsole() {
+  const session = useSession();
+  const guardName = session?.mode === "demo" && session.role === "security" ? session.displayName : PERSONAS.security.displayName;
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#fafafa] dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans">
-      {/* Emergency Siren Banner */}
-      {sirenActive && (
-        <div className="bg-red-600 text-white px-4 md:px-8 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Flame className="w-5 h-5 shrink-0" />
-            <div>
-              <p className="font-semibold text-xs md:text-sm tracking-wide uppercase">
-                Active SOS Alarm
-              </p>
-              <p className="text-xs opacity-90">{sosDetails || "Emergency triggered by resident."}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              className="bg-white text-zinc-900 hover:bg-zinc-100 text-xs h-7 font-medium"
-              onClick={() => {
-                toast.success("Guard unit dispatched to location");
-              }}
-            >
-              Dispatch Unit
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-white hover:bg-red-700 text-xs h-7"
-              onClick={() => {
-                setSirenActive(false);
-                localStorage.removeItem("nexgate_emergency_sos");
-                toast.info("SOS alarm muted");
-              }}
-            >
-              Mute
-            </Button>
-          </div>
-        </div>
-      )}
+    <ConsoleShell
+      role="security"
+      icon={Shield}
+      title={
+        <span className="flex items-center gap-2">
+          Gate console <Pill tone="emerald" dot>North Gate 1</Pill>
+        </span>
+      }
+      subtitle={`On duty: ${guardName}`}
+      banner={<SosBanner guardName={guardName} />}
+      actions={
+        <>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setVerifyOpen(true)}>
+            <KeyRound className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Verify</span> PIN
+          </Button>
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setCheckInOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> Check in
+          </Button>
+        </>
+      }
+    >
+      <GateConsole guardName={guardName} onVerify={() => setVerifyOpen(true)} onCheckIn={() => setCheckInOpen(true)} />
+      <VerifyPinDialog open={verifyOpen} onOpenChange={setVerifyOpen} guardName={guardName} />
+      <CheckInDialog open={checkInOpen} onOpenChange={setCheckInOpen} guardName={guardName} />
+    </ConsoleShell>
+  );
+}
 
-      {/* Top Security Bar */}
-      <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 sticky top-0 z-40 px-4 md:px-8 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-zinc-900 dark:bg-white flex items-center justify-center text-white dark:text-zinc-900">
-            <Shield className="w-4 h-4" />
-          </div>
+function SosBanner({ guardName }: { guardName: string }) {
+  const state = useDemoState();
+  const now = useNow(5_000);
+  const [muted, setMuted] = useState(false);
+  const audio = useRef<AudioContext | null>(null);
+  const alert = activeSos(state);
+
+  useNewItems(
+    state.sos.filter((a) => !a.resolvedAt && !a.cancelledAt),
+    (a) => a.alertId,
+    (a: SosAlert) => {
+      if (!muted) playAlarm(audio);
+      toast.error(`SOS: ${a.title} at ${a.block}-${a.flat}`, { description: `${a.residentName} · ${a.phone}`, duration: 15_000 });
+    },
+  );
+
+  if (!alert) return null;
+  return (
+    <div className="bg-red-600 text-white" role="alert">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-10">
+        <div className="flex items-start gap-3">
+          <Siren className="mt-0.5 h-5 w-5 shrink-0 animate-pulse" />
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-semibold text-sm tracking-tight">Guard Station</h1>
-              <Badge variant="outline" className="text-[10px]">
-                Gate 1 Active
-              </Badge>
-            </div>
-            <p className="text-xs text-zinc-400">
-              Officer Vikram Singh (#G-04)
+            <p className="text-sm font-semibold uppercase tracking-wide">
+              {alert.title} · Tower {alert.block}, Flat {alert.flat}
+            </p>
+            <p className="text-xs opacity-90">
+              {alert.residentName} ·{" "}
+              <a href={`tel:${alert.phone}`} className="underline underline-offset-2">
+                {alert.phone}
+              </a>{" "}
+              · raised {timeAgo(alert.raisedAt, now)}
+              {alert.acknowledgedAt && ` · ${alert.acknowledgedBy} responding since ${clock(alert.acknowledgedAt)}`}
             </p>
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          {/* Theme Toggle */}
-          <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="w-8 h-8 flex items-center justify-center rounded border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            title="Toggle theme"
+        <div className="flex shrink-0 items-center gap-2">
+          {!alert.acknowledgedAt ? (
+            <Button
+              size="sm"
+              className="h-8 bg-white text-xs font-semibold text-red-700 hover:bg-red-50"
+              onClick={() => {
+                acknowledgeSos(alert.alertId, guardName);
+                toast.success("Response logged", { description: `The resident at ${alert.block}-${alert.flat} has been told help is on the way.` });
+              }}
+            >
+              Respond now
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              className="h-8 bg-white text-xs font-semibold text-red-700 hover:bg-red-50"
+              onClick={() => {
+                resolveSos(alert.alertId);
+                toast.success("SOS resolved");
+              }}
+            >
+              <Check className="mr-1 h-3.5 w-3.5" /> Mark resolved
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 text-xs text-white hover:bg-red-700 hover:text-white"
+            onClick={() => setMuted((m) => !m)}
+            aria-pressed={muted}
+            aria-label={muted ? "Unmute alarm" : "Mute alarm"}
           >
-            <Sun className="w-4 h-4 block dark:hidden" />
-            <Moon className="w-4 h-4 hidden dark:block" />
-          </button>
-
-          {/* Rapid Verify GatePass Button */}
-          <Dialog open={isVerifyPassOpen} onOpenChange={setIsVerifyPassOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="sm" className="hidden sm:flex items-center gap-1.5 text-xs h-8">
-                <QrCode className="w-3.5 h-3.5" />
-                <span>Verify Pass</span>
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800">
-              <DialogHeader>
-                <DialogTitle className="text-base font-semibold">
-                  Verify Pass PIN
-                </DialogTitle>
-                <DialogDescription className="text-xs text-zinc-500">
-                  Enter the 6-digit visitor invite code provided by the resident.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-zinc-500">Passcode / PIN</Label>
-                  <Input
-                    placeholder="e.g. 842190"
-                    value={passPin}
-                    onChange={(e) => setPassPin(e.target.value)}
-                    className="text-center font-mono text-xl tracking-widest font-semibold h-11"
-                    maxLength={8}
-                    autoFocus
-                  />
-                </div>
-                <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-zinc-700 dark:text-zinc-300 shrink-0" />
-                  <span>Pre-approved entries open gate without ringing resident intercom.</span>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsVerifyPassOpen(false)}>Cancel</Button>
-                <Button onClick={handleVerifyPass} className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900">
-                  Verify &amp; Admit
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          {/* Quick Add Visitor Button */}
-          <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 flex items-center gap-1.5 text-xs h-8">
-                <Plus className="w-3.5 h-3.5" />
-                <span>Check-in</span>
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800">
-              <DialogHeader>
-                <DialogTitle className="text-base font-semibold flex items-center gap-2">
-                  <Camera className="w-4 h-4" />
-                  Register Visitor
-                </DialogTitle>
-                <DialogDescription className="text-xs text-zinc-500">
-                  Log arriving guest and dispatch approval request to resident flat.
-                </DialogDescription>
-              </DialogHeader>
-
-              <form onSubmit={handleRegisterVisitor} className="space-y-3.5 py-2">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Full Name</Label>
-                    <Input
-                      required
-                      placeholder="e.g. Ramesh Kumar"
-                      value={newVisitor.name}
-                      onChange={(e) => setNewVisitor({ ...newVisitor, name: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Phone</Label>
-                    <Input
-                      required
-                      type="tel"
-                      placeholder="Mobile number"
-                      value={newVisitor.number}
-                      onChange={(e) => setNewVisitor({ ...newVisitor, number: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Purpose</Label>
-                    <Select
-                      value={newVisitor.purpose}
-                      onValueChange={(val) => setNewVisitor({ ...newVisitor, purpose: val })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Guest">Guest</SelectItem>
-                        <SelectItem value="Delivery">Delivery</SelectItem>
-                        <SelectItem value="Cab">Cab</SelectItem>
-                        <SelectItem value="Service">Service</SelectItem>
-                        <SelectItem value="Daily Help">Daily Staff</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Block</Label>
-                    <Select
-                      value={newVisitor.block}
-                      onValueChange={(val) => setNewVisitor({ ...newVisitor, block: val })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="A">Block A</SelectItem>
-                        <SelectItem value="B">Block B</SelectItem>
-                        <SelectItem value="C">Block C</SelectItem>
-                        <SelectItem value="D">Block D</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Flat #</Label>
-                    <Input
-                      required
-                      placeholder="e.g. 302"
-                      value={newVisitor.flat}
-                      onChange={(e) => setNewVisitor({ ...newVisitor, flat: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Vehicle (Optional)</Label>
-                    <Input
-                      placeholder="e.g. KA-01-AB-1234"
-                      value={newVisitor.vehicleNo}
-                      onChange={(e) => setNewVisitor({ ...newVisitor, vehicleNo: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-zinc-500">Age</Label>
-                    <Input
-                      type="number"
-                      placeholder="e.g. 28"
-                      value={newVisitor.age}
-                      onChange={(e) => setNewVisitor({ ...newVisitor, age: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs text-zinc-500">Company / Origin</Label>
-                  <Input
-                    placeholder="e.g. Swiggy, Amazon, Friend"
-                    value={newVisitor.address}
-                    onChange={(e) => setNewVisitor({ ...newVisitor, address: e.target.value })}
-                  />
-                </div>
-
-                <DialogFooter className="pt-2">
-                  <Button type="button" variant="outline" onClick={() => setIsAddOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" className="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900">
-                    Send Approval Request
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-
-          <Link href="/user">
-            <Button variant="ghost" size="sm" className="text-xs text-zinc-500 h-8">
-              Resident App
-            </Button>
-          </Link>
-          <Link href="/login">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-900" title="Logout">
-              <LogOut className="w-4 h-4" />
-            </Button>
-          </Link>
+            {muted ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+          </Button>
         </div>
-      </header>
+      </div>
+    </div>
+  );
+}
 
-      {/* Main Guard Console Content */}
-      <main className="w-full max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
-        {/* KPI Stats Banner */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-            <CardContent className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-zinc-400">Currently Inside</p>
-                <p className="text-2xl font-semibold mt-1 tabular-nums text-zinc-900 dark:text-zinc-100">
-                  {insideCommunityList.length}
-                </p>
-                <p className="text-[11px] text-zinc-400 mt-0.5">Active on premises</p>
-              </div>
-              <div className="w-9 h-9 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 flex items-center justify-center">
-                <UserCheck className="w-4 h-4" />
-              </div>
-            </CardContent>
-          </Card>
+function GateConsole({ guardName, onVerify, onCheckIn }: { guardName: string; onVerify: () => void; onCheckIn: () => void }) {
+  const state = useDemoState();
+  const now = useNow(15_000);
+  const [query, setQuery] = useState("");
+  const [purpose, setPurpose] = useState<"all" | VisitorPurpose>("all");
 
-          <Card className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-            <CardContent className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-zinc-400">Awaiting Approval</p>
-                <p className="text-2xl font-semibold mt-1 tabular-nums text-zinc-900 dark:text-zinc-100">
-                  {waitingApprovalList.length}
-                </p>
-                <p className="text-[11px] text-zinc-400 mt-0.5">Decision pending</p>
-              </div>
-              <div className="w-9 h-9 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 flex items-center justify-center">
-                <Clock className="w-4 h-4" />
-              </div>
-            </CardContent>
-          </Card>
+  // Phone numbers we know per flat (from the maintenance ledger) so the guard can call residents.
+  const flatPhones = useMemo(() => {
+    const m = new Map<string, { name: string; phone: string }>();
+    for (const b of state.bills) m.set(`${b.block}-${b.flat}`, { name: b.residentName, phone: b.phone });
+    return m;
+  }, [state.bills]);
 
-          <Card className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-            <CardContent className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-zinc-400">Departed Today</p>
-                <p className="text-2xl font-semibold mt-1 tabular-nums text-zinc-900 dark:text-zinc-100">
-                  {departedList.length}
-                </p>
-                <p className="text-[11px] text-zinc-400 mt-0.5">Logged exits</p>
-              </div>
-              <div className="w-9 h-9 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 flex items-center justify-center">
-                <LogOut className="w-4 h-4" />
-              </div>
-            </CardContent>
-          </Card>
+  const waiting = state.visitors.filter((v) => v.status === "waiting");
+  const inside = state.visitors.filter((v) => v.status === "inside");
+  const entriesToday = state.visitors.filter((v) => isToday(v.entryAt)).length;
+  const exitsToday = state.visitors.filter((v) => isToday(v.exitAt)).length;
 
-          <Card className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none">
-            <CardContent className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-zinc-400">Barrier &amp; OCR</p>
-                <p className="text-sm font-semibold mt-1.5 flex items-center gap-1.5 text-zinc-900 dark:text-zinc-100">
-                  <CheckCircle2 className="w-4 h-4 text-zinc-600 dark:text-zinc-400" /> Operational
-                </p>
-                <p className="text-[11px] text-zinc-400 mt-0.5">Barrier 1 Online</p>
-              </div>
-              <div className="w-9 h-9 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 flex items-center justify-center">
-                <Activity className="w-4 h-4" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+  // Let the guard know when a resident answers a request from their phone.
+  useNewItems(
+    state.visitors.filter((v) => v.decidedBy === "resident" && v.decidedAt),
+    (v) => v.visitorId,
+    (v) =>
+      v.status === "denied"
+        ? toast.error(`${v.block}-${v.flat} declined ${visitorLabel(v)}`, { description: "Please turn the visitor away politely." })
+        : toast.success(`${v.block}-${v.flat} approved ${visitorLabel(v)}`, { description: "Open the barrier — the visitor is now marked inside." }),
+  );
 
-        {/* Pending Approval Priority Section */}
-        {waitingApprovalList.length > 0 && (
-          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 md:p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-zinc-900 dark:bg-zinc-100 animate-pulse" />
-                <h2 className="font-semibold text-sm">
-                  Awaiting Resident Decision ({waitingApprovalList.length})
-                </h2>
-              </div>
-              <p className="text-xs text-zinc-400 hidden sm:block">
-                Approval push notification sent to flat
-              </p>
-            </div>
+  const q = query.trim().toLowerCase();
+  const filteredInside = inside
+    .filter((v) => purpose === "all" || v.purpose === purpose)
+    .filter(
+      (v) =>
+        !q ||
+        v.name.toLowerCase().includes(q) ||
+        `${v.block}-${v.flat}`.toLowerCase().includes(q) ||
+        (v.vehicleNo ?? "").toLowerCase().replace(/\W/g, "").includes(q.replace(/\W/g, "")) ||
+        (v.company ?? "").toLowerCase().includes(q),
+    );
+  const overstaying = (v: Visitor) => !!v.entryAt && now - new Date(v.entryAt).getTime() > OVERSTAY_MIN[v.purpose] * 60_000;
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {waitingApprovalList.map((visitor) => (
-                <div
-                  key={visitor.visitorId}
-                  className="bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700/60 rounded-md p-3.5 space-y-3"
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="font-semibold text-sm">{visitor.name}</p>
-                      <p className="text-xs text-zinc-400 flex items-center gap-1 mt-0.5">
-                        <Phone className="w-3 h-3" /> {visitor.number}
+  const log = state.visitors
+    .filter((v) => v.status === "left" || v.status === "denied")
+    .sort((a, b) => (b.exitAt ?? b.decidedAt ?? "").localeCompare(a.exitAt ?? a.decidedAt ?? ""))
+    .slice(0, 8);
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Inside now" value={inside.length} hint={`${inside.filter(overstaying).length} overstaying`} icon={UserCheck} tone="success" />
+        <StatCard label="Awaiting residents" value={waiting.length} hint="Approval requests sent" icon={Clock} tone={waiting.length ? "warning" : "default"} />
+        <StatCard label="Entries today" value={entriesToday} hint="Approved, pass or guard admits" icon={LogIn} />
+        <StatCard label="Exits today" value={exitsToday} hint="Logged departures" icon={LogOut} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:hidden">
+        <Button variant="outline" onClick={onVerify} className="h-11 gap-2">
+          <KeyRound className="h-4 w-4" /> Verify PIN
+        </Button>
+        <Button onClick={onCheckIn} className="h-11 gap-2">
+          <Plus className="h-4 w-4" /> Check in
+        </Button>
+      </div>
+
+      {waiting.length > 0 && (
+        <Panel
+          title={
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /> Waiting for resident approval ({waiting.length})
+            </span>
+          }
+          description="Residents get a notification. If they confirm by phone instead, admit from here."
+          className="border-amber-300 dark:border-amber-900/70"
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {waiting.map((v) => {
+              const contact = flatPhones.get(`${v.block}-${v.flat}`);
+              return (
+                <div key={v.visitorId} className="space-y-3 rounded-md border border-zinc-200 bg-zinc-50 p-3.5 dark:border-zinc-700/60 dark:bg-zinc-800/40">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{visitorLabel(v)}</p>
+                      <p className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                        <Phone className="h-3 w-3" /> {v.phone}
+                        {v.vehicleNo && <span className="ml-2 font-mono">{v.vehicleNo}</span>}
                       </p>
                     </div>
-                    <Badge variant="outline" className="text-[10px]">
-                      {visitor.purpose}
-                    </Badge>
+                    <Pill>{v.purpose}</Pill>
                   </div>
-
-                  <div className="text-xs flex items-center justify-between bg-white dark:bg-zinc-800 p-2 rounded border border-zinc-100 dark:border-zinc-700">
-                    <span className="text-zinc-400">Destination</span>
-                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                      Block {visitor.room?.block || "A"} - Flat {visitor.room?.room || "302"}
+                  <div className="flex items-center justify-between rounded border border-zinc-200 bg-white px-2.5 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                    <span className="font-medium">
+                      Flat {v.block}-{v.flat}
                     </span>
+                    <span className="font-medium text-amber-700 dark:text-amber-400">waiting {timeAgo(v.createdAt, now).replace(" ago", "")}</span>
                   </div>
-
-                  <div className="flex items-center gap-2 pt-1">
+                  <div className="flex gap-2">
                     <Button
                       size="sm"
-                      onClick={() => handleApproveEntry(visitor.visitorId)}
-                      className="w-full bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 text-xs h-7 gap-1"
+                      className="h-8 flex-1 gap-1 text-xs"
+                      onClick={() => {
+                        guardDecide(v.visitorId, true, guardName);
+                        toast.success(`${v.name} admitted`, { description: `Logged as confirmed by ${v.block}-${v.flat} over the phone.` });
+                      }}
                     >
-                      <Check className="w-3.5 h-3.5" /> Admit
+                      <Check className="h-3.5 w-3.5" /> Admit
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => handleMarkExit(visitor.visitorId)}
-                      className="text-xs h-7 px-3 gap-1"
+                      className="h-8 gap-1 text-xs"
+                      onClick={() => {
+                        guardDecide(v.visitorId, false, guardName);
+                        toast(`${v.name} turned away`);
+                      }}
                     >
-                      <XCircle className="w-3.5 h-3.5" /> Deny
+                      <X className="h-3.5 w-3.5" /> Turn away
+                    </Button>
+                    {contact && (
+                      <Button asChild size="sm" variant="outline" className="h-8 px-2.5 text-xs" title={`Call ${contact.name}`}>
+                        <a href={`tel:${contact.phone}`} aria-label={`Call ${contact.name}`}>
+                          <Phone className="h-3.5 w-3.5" />
+                        </a>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+
+      <section className="space-y-3">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div>
+            <h2 className="text-sm font-semibold">On the premises</h2>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">Everyone admitted and not yet checked out.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Input placeholder="Name, flat or vehicle…" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 pl-9 text-xs" aria-label="Search visitors" />
+            </div>
+            <Select value={purpose} onValueChange={(v) => setPurpose(v as typeof purpose)}>
+              <SelectTrigger className="h-8 w-32 text-xs" aria-label="Filter by purpose">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All purposes</SelectItem>
+                {PURPOSES.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {filteredInside.length === 0 ? (
+          <EmptyState icon={UserCheck} title={q || purpose !== "all" ? "No matches" : "Nobody inside"} description={q ? "Try a different name, flat or vehicle number." : "Admitted visitors appear here until they check out."} />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {filteredInside.map((v) => {
+              const over = overstaying(v);
+              return (
+                <div
+                  key={v.visitorId}
+                  className={cn(
+                    "space-y-3 rounded-lg border bg-white p-4 dark:bg-zinc-900",
+                    over ? "border-amber-300 dark:border-amber-900/70" : "border-zinc-200 dark:border-zinc-800",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-zinc-100 text-xs font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                        {initials(v.name)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{visitorLabel(v)}</p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">{v.phone}</p>
+                      </div>
+                    </div>
+                    <Pill>{v.purpose}</Pill>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 rounded bg-zinc-50 p-2 text-xs dark:bg-zinc-800/40">
+                    <div>
+                      <span className="block text-[10px] text-zinc-400">Flat</span>
+                      <span className="font-medium">
+                        {v.block}-{v.flat}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-zinc-400">Vehicle</span>
+                      <span className="font-mono">{v.vehicleNo ?? "On foot"}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-zinc-400">In since</span>
+                      <span className="font-medium">{clock(v.entryAt)}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    {over ? (
+                      <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="h-3 w-3" /> Overstaying ({timeAgo(v.entryAt, now).replace(" ago", "")})
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-zinc-400">
+                        {v.decidedBy === "pass" ? `Pass ${v.passId}` : v.decidedBy === "guard" ? "Admitted by guard" : "Approved by resident"}
+                      </span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 text-xs"
+                      onClick={() => {
+                        checkoutVisitor(v.visitorId);
+                        toast.success(`${v.name} checked out`);
+                      }}
+                    >
+                      <LogOut className="h-3 w-3" /> Check out
                     </Button>
                   </div>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
         )}
+      </section>
 
-        {/* Active Visitors Inside Directory */}
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold tracking-tight">Visitors on Premises</h2>
-              <p className="text-xs text-zinc-400">
-                Admitted guests, couriers, and cabs inside society perimeter.
+      {log.length > 0 && (
+        <Panel title="Recent exits & refusals" bodyClassName="p-0">
+          <ul className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
+            {log.map((v) => (
+              <li key={v.visitorId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{visitorLabel(v)}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {v.purpose} · Flat {v.block}-{v.flat} · {v.status === "left" ? `${clock(v.entryAt)} – ${clock(v.exitAt)}` : friendlyDateTime(v.decidedAt ?? v.createdAt)}
+                  </p>
+                </div>
+                <VisitorStatusPill status={v.status} />
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+    </>
+  );
+}
+
+function VerifyPinDialog({ open, onOpenChange, guardName }: { open: boolean; onOpenChange: (o: boolean) => void; guardName: string }) {
+  const state = useDemoState();
+  const [pin, setPin] = useState("");
+  const [result, setResult] = useState<VerifyResult | null>(null);
+  const activePins = state.passes.filter((p) => passStatus(p) === "active").slice(0, 4);
+
+  const close = (o: boolean) => {
+    onOpenChange(o);
+    if (!o) {
+      setPin("");
+      setResult(null);
+    }
+  };
+
+  const verify = (value = pin) => {
+    if (value.length !== 6) return;
+    const r = verifyPin(value, guardName);
+    setResult(r);
+    if (r.ok) toast.success(`${r.pass.guestName} admitted`, { description: `Pass ${r.pass.passId} for ${r.pass.block}-${r.pass.flat}` });
+  };
+
+  const reasons: Record<Exclude<VerifyResult, { ok: true }>["reason"], string> = {
+    not_found: "No pass matches this PIN. Ask the visitor to check the PIN, or check them in manually.",
+    expired: "This pass has expired.",
+    used: "This PIN has already been used.",
+    revoked: "The resident revoked this pass.",
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Verify gate pass</DialogTitle>
+          <DialogDescription>Enter the 6-digit PIN the visitor shows you.</DialogDescription>
+        </DialogHeader>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            verify();
+          }}
+          className="space-y-4"
+        >
+          <Input
+            autoFocus
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            aria-label="Gate pass PIN"
+            placeholder="••••••"
+            maxLength={6}
+            value={pin}
+            onChange={(e) => {
+              setPin(e.target.value.replace(/\D/g, "").slice(0, 6));
+              setResult(null);
+            }}
+            className="h-14 text-center font-mono text-3xl font-bold tracking-[0.4em]"
+          />
+
+          {result?.ok && (
+            <div className="space-y-1 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm dark:border-emerald-900/60 dark:bg-emerald-950/30">
+              <p className="flex items-center gap-1.5 font-semibold text-emerald-800 dark:text-emerald-300">
+                <CheckCircle2 className="h-4 w-4" /> Valid — open the barrier
               </p>
+              <p className="text-emerald-900 dark:text-emerald-200">
+                {result.pass.guestName} · {result.pass.entryType} → Flat {result.pass.block}-{result.pass.flat}
+              </p>
+              {result.pass.vehicleNo && <p className="font-mono text-xs text-emerald-800 dark:text-emerald-300">Vehicle {result.pass.vehicleNo}</p>}
             </div>
-
-            <div className="flex items-center gap-2">
-              <div className="relative w-full sm:w-64">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-                <Input
-                  placeholder="Search name, flat, vehicle..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-8 text-xs"
-                />
-              </div>
-
-              <Select value={selectedPurpose} onValueChange={setSelectedPurpose}>
-                <SelectTrigger className="w-28 h-8 text-xs">
-                  <SelectValue placeholder="Filter" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="guest">Guest</SelectItem>
-                  <SelectItem value="delivery">Delivery</SelectItem>
-                  <SelectItem value="service">Service</SelectItem>
-                  <SelectItem value="cab">Cab</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={fetchVisitors}
-                title="Refresh"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-              </Button>
-            </div>
-          </div>
-
-          {filteredInside.length === 0 ? (
-            <Card className="border-dashed border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-none">
-              <CardContent className="p-8 text-center space-y-1.5">
-                <UserCheck className="w-8 h-8 mx-auto text-zinc-400" />
-                <p className="font-medium text-sm text-zinc-700 dark:text-zinc-300">No visitors inside matching query</p>
-                <p className="text-xs text-zinc-400">
-                  {searchQuery ? "Refine your search term." : "All admitted visitors have checked out."}
+          )}
+          {result && !result.ok && (
+            <div className="space-y-1 rounded-md border border-red-300 bg-red-50 p-3 text-sm dark:border-red-900/60 dark:bg-red-950/30">
+              <p className="flex items-center gap-1.5 font-semibold text-red-800 dark:text-red-300">
+                <XCircle className="h-4 w-4" /> Do not admit
+              </p>
+              <p className="text-red-900 dark:text-red-200">{reasons[result.reason]}</p>
+              {result.pass && (
+                <p className="text-xs text-red-800 dark:text-red-300">
+                  {result.pass.guestName} · Flat {result.pass.block}-{result.pass.flat}
+                  {result.reason === "used" && result.pass.usedAt && ` · used ${friendlyDateTime(result.pass.usedAt)}`}
+                  {result.reason === "expired" && ` · expired ${friendlyDateTime(result.pass.expiresAt)}`}
                 </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredInside.map((v) => (
-                <Card
-                  key={v.visitorId}
-                  className="bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shadow-none"
+              )}
+            </div>
+          )}
+
+          {activePins.length > 0 && !result && (
+            <div className="rounded-md bg-zinc-50 p-2.5 text-xs text-zinc-500 dark:bg-zinc-800/50 dark:text-zinc-400">
+              <span className="font-medium">Demo — active PINs: </span>
+              {activePins.map((p) => (
+                <button
+                  key={p.passId}
+                  type="button"
+                  onClick={() => setPin(p.pin)}
+                  className="mr-1.5 rounded border border-zinc-200 bg-white px-1.5 py-0.5 font-mono text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
                 >
-                  <CardHeader className="p-4 pb-2">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 flex items-center justify-center font-bold text-xs">
-                          {v.name.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div>
-                          <CardTitle className="text-xs font-semibold">{v.name}</CardTitle>
-                          <CardDescription className="text-[11px] flex items-center gap-1">
-                            <Phone className="w-3 h-3 text-zinc-400" /> {v.number}
-                          </CardDescription>
-                        </div>
-                      </div>
-                      <Badge variant="outline" className="text-[10px]">
-                        {v.purpose}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="p-4 pt-2 space-y-2.5">
-                    <div className="grid grid-cols-2 gap-2 text-xs bg-zinc-50 dark:bg-zinc-800/40 p-2 rounded">
-                      <div>
-                        <span className="text-zinc-400 block text-[10px]">Destination</span>
-                        <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                          {v.room ? `Block ${v.room.block}-${v.room.room}` : "Flat A-302"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400 block text-[10px]">Vehicle</span>
-                        <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                          {v.vehicleNo || "Pedestrian"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        In: {new Date(v.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                      <span className="text-zinc-600 dark:text-zinc-400">Admitted</span>
-                    </div>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleMarkExit(v.visitorId)}
-                      className="w-full text-xs h-7 flex items-center justify-center gap-1.5"
-                    >
-                      <LogOut className="w-3 h-3" /> Check Out
-                    </Button>
-                  </CardContent>
-                </Card>
+                  {p.pin}
+                </button>
               ))}
             </div>
           )}
-        </div>
 
-        {/* Departures History Log */}
-        {departedList.length > 0 && (
-          <div className="space-y-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
-            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
-              Departures Log (Today)
-            </h3>
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md overflow-hidden">
-              <div className="divide-y divide-zinc-100 dark:divide-zinc-800 text-xs">
-                {departedList.slice(0, 5).map((dep) => (
-                  <div key={dep.visitorId} className="p-3 flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-zinc-900 dark:text-zinc-100">{dep.name}</p>
-                      <p className="text-[11px] text-zinc-400">
-                        {dep.purpose} • Flat {dep.room?.block}-{dep.room?.room}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <Badge variant="outline" className="text-[10px]">
-                        Checked Out
-                      </Badge>
-                      <p className="text-[10px] text-zinc-400 mt-0.5">
-                        {new Date(dep.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            {result ? (
+              <>
+                <Button type="button" variant="outline" onClick={() => { setPin(""); setResult(null); }}>
+                  Verify another
+                </Button>
+                <Button type="button" onClick={() => close(false)}>
+                  Done
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button type="button" variant="outline" onClick={() => close(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={pin.length !== 6}>
+                  Verify &amp; admit
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const EMPTY_VISITOR = { name: "", phone: "", purpose: "Delivery" as VisitorPurpose, company: "", block: "A", flat: "", vehicleNo: "" };
+
+function CheckInDialog({ open, onOpenChange, guardName }: { open: boolean; onOpenChange: (o: boolean) => void; guardName: string }) {
+  const { resident } = useDemoState();
+  const [v, setV] = useState(EMPTY_VISITOR);
+  const [touched, setTouched] = useState(false);
+  const phone = v.phone.replace(/\D/g, "");
+  const errors = {
+    name: v.name.trim().length < 2 ? "Enter the visitor's name" : null,
+    phone: phone.length !== 10 ? "Enter a 10-digit mobile number" : null,
+    flat: !v.flat ? "Choose a flat" : null,
+  };
+  const valid = !errors.name && !errors.phone && !errors.flat;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (!valid) return;
+    registerVisitor({ ...v, name: v.name.trim(), phone, company: v.company.trim() }, guardName);
+    toast.success("Approval request sent", { description: `${v.name.trim()} is waiting — Flat ${v.block}-${v.flat} has been notified.` });
+    setV({ ...EMPTY_VISITOR, purpose: v.purpose });
+    setTouched(false);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Check in a visitor</DialogTitle>
+          <DialogDescription>Log the visitor and send an approval request to the flat.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3.5" noValidate>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="ci-name" className="text-xs">Name</Label>
+              <Input id="ci-name" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} placeholder="Ramesh Kumar" aria-invalid={touched && !!errors.name} />
+              {touched && errors.name && <p className="text-xs text-red-600">{errors.name}</p>}
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ci-phone" className="text-xs">Mobile</Label>
+              <Input id="ci-phone" type="tel" inputMode="numeric" value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} placeholder="98765 43210" aria-invalid={touched && !!errors.phone} />
+              {touched && errors.phone && <p className="text-xs text-red-600">{errors.phone}</p>}
             </div>
           </div>
-        )}
-      </main>
-    </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Purpose</Label>
+              <Select value={v.purpose} onValueChange={(p: VisitorPurpose) => setV({ ...v, purpose: p })}>
+                <SelectTrigger aria-label="Purpose">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PURPOSES.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Tower</Label>
+              <Select value={v.block} onValueChange={(b) => setV({ ...v, block: b })}>
+                <SelectTrigger aria-label="Tower">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BLOCKS.map((b) => (
+                    <SelectItem key={b} value={b}>
+                      Tower {b}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Flat</Label>
+              <Select value={v.flat} onValueChange={(f) => setV({ ...v, flat: f })}>
+                <SelectTrigger aria-label="Flat" aria-invalid={touched && !!errors.flat}>
+                  <SelectValue placeholder="Flat" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {FLATS.map((f) => (
+                    <SelectItem key={f} value={f}>
+                      {f}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {touched && errors.flat && <p className="text-xs text-red-600">{errors.flat}</p>}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="ci-company" className="text-xs">Company <span className="font-normal text-zinc-400">(optional)</span></Label>
+              <Input id="ci-company" value={v.company} onChange={(e) => setV({ ...v, company: e.target.value })} placeholder="Swiggy, Amazon, Urban Company…" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ci-vehicle" className="text-xs">Vehicle <span className="font-normal text-zinc-400">(optional)</span></Label>
+              <Input
+                id="ci-vehicle"
+                value={v.vehicleNo}
+                onChange={(e) => setV({ ...v, vehicleNo: e.target.value.toUpperCase() })}
+                placeholder="KA-01-AB-1234"
+                className="font-mono"
+              />
+            </div>
+          </div>
+          <p className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+            <Bell className="h-3 w-3 shrink-0" />
+            <span>
+              Demo tip: check someone in for{" "}
+              <button type="button" className="font-semibold underline underline-offset-2" onClick={() => setV({ ...v, block: resident.block, flat: resident.flat })}>
+                Flat {resident.block}-{resident.flat}
+              </button>{" "}
+              and they&apos;ll pop up in the resident app instantly.
+            </span>
+          </p>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={touched && !valid}>
+              Send approval request
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

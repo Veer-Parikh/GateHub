@@ -1,589 +1,413 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Sidebar } from "@/components/sidebar";
-import { toast } from "sonner";
 import Link from "next/link";
+import { useMemo } from "react";
+import { toast } from "sonner";
 import {
-  QrCode,
-  Siren,
-  ShoppingBag,
-  Receipt,
-  Check,
-  X,
   ArrowRight,
-  User,
+  BellRing,
   Building2,
-  Clock,
-  Wrench,
-  ShieldCheck,
-  CheckCircle2,
-  AlertCircle,
-  PhoneCall,
-  Sparkles,
-  Car,
   CalendarDays,
-  UserCheck,
-  Share2,
+  Car,
+  Check,
+  Clock,
   Copy,
-  Plus,
   ExternalLink,
-  ShieldAlert,
+  LogOut,
+  Phone,
+  Plus,
+  QrCode,
+  Receipt,
+  ShoppingBag,
+  Siren,
+  Trophy,
+  UserCheck,
+  Video,
+  Wrench,
+  X,
 } from "lucide-react";
+import { AppShell } from "@/components/app-shell";
+import { EmptyState, PageHeader, Panel, SourceBadge, StatCard } from "@/components/page";
+import { BookingStatusPill, Pill } from "@/components/status";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import {
-  getOrCreateDemoStore,
-  approveVisitorLocal,
-  denyVisitorLocal,
-  payMaintenanceLocal,
-  VisitorItem,
-  DemoResident,
-  GatePassItem,
-} from "@/lib/mock-data";
+import { Progress } from "@/components/ui/progress";
+import { useNow } from "@/hooks/use-now";
+import { activeSos, passStatus, visitorLabel } from "@/lib/actions";
+import { useBills, useVisitors } from "@/lib/data";
+import { clock, countdown, friendlyDateTime, inr, relativeDay, timeAgo } from "@/lib/format";
+import { levelFor, totalPoints } from "@/lib/gamification";
+import { pointsToast } from "@/lib/notify";
+import { useDemoState } from "@/lib/store";
 
-export default function UserDashboard() {
-  const [resident, setResident] = useState<DemoResident | null>(null);
-  const [visitors, setVisitors] = useState<VisitorItem[]>([]);
-  const [gatePasses, setGatePasses] = useState<GatePassItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+function greeting(now: number) {
+  const h = new Date(now).getHours();
+  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+}
 
-  const syncData = () => {
-    const store = getOrCreateDemoStore();
-    setResident(store.resident);
-    setVisitors(store.visitors);
-    setGatePasses(store.gatePasses);
-    setIsLoading(false);
-  };
+const QUICK_ACTIONS = [
+  { href: "/user/gatepass", icon: QrCode, label: "Issue gate pass", hint: "6-digit PIN for guests" },
+  { href: "/user/bookings", icon: Wrench, label: "Book a service", hint: "Plumber or laundry" },
+  { href: "/user/marketplace", icon: ShoppingBag, label: "Sell or give away", hint: "Neighbours only" },
+  { href: "/user/sos", icon: Siren, label: "Emergency SOS", hint: "Alerts the gate desk", danger: true },
+];
 
-  useEffect(() => {
-    syncData();
-  }, []);
+export default function ResidentDashboard() {
+  return (
+    <AppShell>
+      <Dashboard />
+    </AppShell>
+  );
+}
 
-  const handleApproveVisitor = (visitorId: string, name: string) => {
-    const updated = approveVisitorLocal(visitorId);
-    setVisitors(updated);
-    toast.success(`Entry Approved for ${name}`, {
-      description: "Digital gate barrier opened. Security console notified.",
-    });
-  };
+function Dashboard() {
+  const now = useNow(15_000);
+  const state = useDemoState();
+  const { resident } = state;
+  const visitorsData = useVisitors();
+  const billsData = useBills();
+  const mine = <T extends { block: string; flat: string }>(x: T) => x.block === resident.block && x.flat === resident.flat;
 
-  const handleDenyVisitor = (visitorId: string, name: string) => {
-    const updated = denyVisitorLocal(visitorId);
-    setVisitors(updated);
-    toast.error(`Entry Denied for ${name}`, {
-      description: "Security guard informed to turn visitor away.",
-    });
-  };
+  const waiting = visitorsData.visitors.filter((v) => v.status === "waiting");
+  const inside = visitorsData.visitors.filter((v) => v.status === "inside");
+  const unpaid = billsData.myBills.filter((b) => !b.paidAt);
+  const due = unpaid.reduce((s, b) => s + b.amount, 0);
+  const nextDue = [...unpaid].sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+  const activePasses = state.passes.filter((p) => mine(p) && passStatus(p, now) === "active");
+  const myBookings = state.bookings.filter((b) => mine(b) && (b.status === "requested" || b.status === "in_progress"));
+  const sos = activeSos(state);
+  const mySos = sos && mine(sos) ? sos : undefined;
+  const points = totalPoints(state.points);
+  const lvl = levelFor(points);
 
-  const handlePayBill = (maintenanceId: string, amount: number) => {
-    const updatedResident = payMaintenanceLocal(maintenanceId);
-    setResident({ ...updatedResident });
-    toast.success("Maintenance Paid Successfully", {
-      description: `INR ${amount.toLocaleString()} settled via Razorpay. GST Invoice generated.`,
-    });
-  };
+  const upcoming = useMemo(() => {
+    const items = [
+      ...state.events.map((e) => ({ id: e.eventId, title: e.title, at: e.date, where: e.venue, kind: e.category, href: "/user/events" })),
+      ...state.meetings
+        .filter((m) => !m.completed)
+        .map((m) => ({ id: m.meetingId, title: m.title, at: m.timing, where: m.online ? "Online + " + m.location : m.location, kind: "Meeting", href: "/user/meetings" })),
+    ];
+    return items.filter((i) => new Date(i.at).getTime() > now).sort((a, b) => a.at.localeCompare(b.at)).slice(0, 3);
+  }, [state.events, state.meetings, now]);
 
-  const copyPin = (pin: string) => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(pin);
-      toast.success(`Pass PIN ${pin} copied to clipboard`);
+  const activity = state.activity.filter((a) => !a.block || mine(a as { block: string; flat: string })).slice(0, 6);
+
+  const decide = async (id: string, name: string, approve: boolean) => {
+    try {
+      const { points: earned } = await (approve ? visitorsData.approve(id) : visitorsData.deny(id));
+      if (approve) toast.success(`${name} approved`, { description: "The guard has been notified to open the barrier." });
+      else toast(`${name} declined`, { description: "The guard will turn the visitor away." });
+      pointsToast(earned, "Quick response at the gate");
+    } catch (e) {
+      toast.error("Couldn't update the visitor", { description: e instanceof Error ? e.message : undefined });
     }
   };
 
-  const waitingVisitors = visitors.filter((v) => !v.status && !v.hasLeft);
-  const insideVisitors = visitors.filter((v) => v.status && !v.hasLeft);
-  const unpaidMaintenance = resident?.room?.Maintenance?.filter((m) => !m.paid) || [];
-  const totalDue = unpaidMaintenance.reduce((sum, m) => sum + m.amount, 0);
+  const copyPin = async (pin: string) => {
+    try {
+      await navigator.clipboard.writeText(pin);
+      toast.success(`PIN ${pin} copied`);
+    } catch {
+      toast.error("Clipboard not available");
+    }
+  };
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <Sidebar userType="user" />
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="w-full max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
-          {/* Welcome Header */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-200 dark:border-zinc-800">
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl lg:text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                  Welcome back, {resident?.name?.split(" ")[0] || "Arjun"}
-                </h1>
-                <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 text-xs font-semibold px-2.5 py-0.5">
-                  Flat Owner
-                </Badge>
-              </div>
-              <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-1.5 flex items-center gap-2 font-medium">
-                <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                <span>{resident?.room?.society || "Palm Heights Township"} &bull; Tower {resident?.room?.block || "A"} &bull; Apartment {resident?.room?.room || "304"}</span>
-              </p>
-            </div>
-
-            {/* Live System Status Chips */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Intercom Gate: Online
-              </span>
-              <Link
-                href="/security"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-slate-300 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400 hover:text-blue-600 transition shadow-sm"
-              >
-                <span>Switch to Guard Console</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+    <>
+      <PageHeader
+        title={`${greeting(now)}, ${resident.name.split(" ")[0]}`}
+        description={
+          <span className="inline-flex items-center gap-1.5">
+            <Building2 className="h-3.5 w-3.5 shrink-0" />
+            {resident.society} · Tower {resident.block} · Flat {resident.flat}
+          </span>
+        }
+        badge={
+          <>
+            {resident.isAdmin && <Pill tone="blue">RWA committee</Pill>}
+            <SourceBadge live={visitorsData.live} error={visitorsData.error} />
+          </>
+        }
+        actions={
+          <>
+            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+              <a href="/security" target="_blank" rel="noopener" title="Open in a new tab — guard actions appear here live">
+                Guard console <ExternalLink className="ml-1 h-3.5 w-3.5" />
+              </a>
+            </Button>
+            <Button asChild size="sm" className="h-8 text-xs">
+              <Link href="/user/gatepass">
+                <Plus className="mr-1 h-3.5 w-3.5" /> Gate pass
               </Link>
-            </div>
+            </Button>
+          </>
+        }
+      />
+
+      {mySos && (
+        <Link
+          href="/user/sos"
+          className="flex items-center justify-between gap-3 rounded-lg bg-red-600 px-4 py-3 text-white transition-colors hover:bg-red-700"
+        >
+          <span className="flex items-center gap-2.5 text-sm font-semibold">
+            <Siren className="h-4 w-4 animate-pulse" />
+            {mySos.title} alert active
+            <span className="font-normal opacity-90">
+              · {mySos.acknowledgedAt ? `${mySos.acknowledgedBy} is responding` : "waiting for the gate desk to respond"}
+            </span>
+          </span>
+          <ArrowRight className="h-4 w-4 shrink-0" />
+        </Link>
+      )}
+
+      {waiting.length > 0 && (
+        <section className="space-y-3 rounded-lg border border-amber-300 bg-amber-50/80 p-4 dark:border-amber-900/70 dark:bg-amber-950/20">
+          <div className="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-200">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500" />
+            </span>
+            {waiting.length === 1 ? "A visitor is waiting at the gate" : `${waiting.length} visitors are waiting at the gate`}
           </div>
-
-          {/* Real-time Incoming Visitor Alert Banner (If Any Waiting) */}
-          {waitingVisitors.length > 0 && (
-            <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/90 dark:bg-amber-950/30 p-5 space-y-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5 text-amber-900 dark:text-amber-200 font-bold text-sm">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping" />
-                  Visitor Awaiting Your Authorization at Main Gate
+          {waiting.map((v) => (
+            <div
+              key={v.visitorId}
+              className="flex flex-col justify-between gap-3 rounded-md border border-amber-200 bg-white p-3.5 dark:border-amber-900/50 dark:bg-zinc-900 sm:flex-row sm:items-center"
+            >
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">{visitorLabel(v)}</span>
+                  <Pill tone="amber">{v.purpose}</Pill>
                 </div>
-                <Badge variant="outline" className="border-amber-400 text-amber-800 dark:text-amber-300 text-xs font-semibold">
-                  Real-time Intercom
-                </Badge>
-              </div>
-
-              {waitingVisitors.map((v) => (
-                <div
-                  key={v.visitorId}
-                  className="p-4 rounded-lg bg-white dark:bg-zinc-900 border border-amber-200 dark:border-amber-900/60 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm"
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-3">
-                      <span className="font-semibold text-base text-zinc-900 dark:text-zinc-100">{v.name}</span>
-                      <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200 border-none text-xs font-semibold px-2 py-0.5">
-                        {v.purpose}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-4 text-xs font-medium text-zinc-600 dark:text-zinc-300 flex-wrap">
-                      <span className="flex items-center gap-1.5">
-                        <PhoneCall className="w-3.5 h-3.5 text-zinc-500" />
-                        {v.number}
-                      </span>
-                      {v.vehicleNo && (
-                        <span className="flex items-center gap-1.5">
-                          <Car className="w-3.5 h-3.5 text-zinc-500" />
-                          {v.vehicleNo}
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-semibold">
-                        <Clock className="w-3.5 h-3.5" />
-                        Arrived 4 mins ago
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <Button
-                      size="sm"
-                      onClick={() => handleApproveVisitor(v.visitorId, v.name)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-4 py-2 h-9 shadow-sm"
-                    >
-                      <Check className="w-4 h-4 mr-1.5" />
-                      Approve Entry
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDenyVisitor(v.visitorId, v.name)}
-                      className="text-xs font-semibold h-9 px-3.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 border-red-200 dark:border-red-900/50"
-                    >
-                      <X className="w-4 h-4 mr-1.5" />
-                      Decline
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* 2-Column Responsive Dashboard Layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Main Column (7 Columns) */}
-            <div className="lg:col-span-7 space-y-6">
-              {/* Quick Metrics (3 Cards) */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Maintenance Card */}
-                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                  <CardContent className="p-5 space-y-2">
-                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                      <span>Maintenance</span>
-                      <Receipt className="w-4 h-4 text-blue-600" />
-                    </div>
-                    {totalDue > 0 ? (
-                      <>
-                        <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
-                          ₹{totalDue.toLocaleString()}
-                        </p>
-                        <p className="text-xs text-amber-700 dark:text-amber-400 font-semibold">
-                          Due: 15 Oct 2026 (October)
-                        </p>
-                        <div className="pt-2">
-                          <Button
-                            size="sm"
-                            onClick={() => handlePayBill(unpaidMaintenance[0].maintenanceId, unpaidMaintenance[0].amount)}
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold h-8"
-                          >
-                            Pay in 1 Click
-                          </Button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                          Clear &amp; Paid
-                        </p>
-                        <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">All invoices settled</p>
-                        <div className="pt-2">
-                          <Link
-                            href="/user/maintenance"
-                            className="block text-center text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline py-1"
-                          >
-                            View Invoices &rarr;
-                          </Link>
-                        </div>
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Active Gate Passes Card */}
-                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                  <CardContent className="p-5 space-y-2">
-                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                      <span>Active Passes</span>
-                      <QrCode className="w-4 h-4 text-blue-600" />
-                    </div>
-                    <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
-                      {gatePasses.length}
-                    </p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Active PIN passes issued</p>
-                    <div className="pt-2">
-                      <Link
-                        href="/user/gatepass"
-                        className="block text-center text-xs bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-semibold py-1.5 rounded-md transition"
-                      >
-                        + Issue Pass
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Inside Premises Card */}
-                <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                  <CardContent className="p-5 space-y-2">
-                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                      <span>Visitors Inside</span>
-                      <UserCheck className="w-4 h-4 text-emerald-600" />
-                    </div>
-                    <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 tabular-nums">
-                      {insideVisitors.length}
-                    </p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400 font-medium truncate">
-                      {insideVisitors.length > 0 ? insideVisitors[0].name : "No visitors inside"}
-                    </p>
-                    <div className="pt-2">
-                      <Link
-                        href="/user/visitors"
-                        className="block text-center text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline py-1"
-                      >
-                        View Registry &rarr;
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Society Hub Services (4 Cards Grid) */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
-                    Society Hub Services
-                  </h2>
-                  <span className="text-xs text-zinc-500 font-medium">Quick Access</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <Link
-                    href="/user/gatepass"
-                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-md transition-all group"
-                  >
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                        <QrCode className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Digital Gate Pass</p>
-                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
-                          Issue instant 6-digit PIN passes for guests, cabs, and delivery partners.
-                        </p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/user/marketplace"
-                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-md transition-all group"
-                  >
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                        <ShoppingBag className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Resident Marketplace</p>
-                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
-                          Buy, sell, and give away verified pre-owned items within your society walls.
-                        </p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/user/bookings"
-                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-teal-500 dark:hover:border-teal-500 hover:shadow-md transition-all group"
-                  >
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-10 h-10 rounded-lg bg-teal-50 dark:bg-teal-950/50 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 group-hover:bg-teal-600 group-hover:text-white transition-colors">
-                        <Wrench className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Facility Services</p>
-                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
-                          Book trusted society plumbers (Raju) and laundry care (FreshPress).
-                        </p>
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href="/user/sos"
-                    className="p-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-red-500 dark:hover:border-red-500 hover:shadow-md transition-all group"
-                  >
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-10 h-10 rounded-lg bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0 group-hover:bg-red-600 group-hover:text-white transition-colors">
-                        <Siren className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Emergency SOS</p>
-                        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed font-medium">
-                          Instant tower-wide panic broadcast to security gate desk and marshals.
-                        </p>
-                      </div>
-                    </div>
-                  </Link>
-                </div>
-              </div>
-
-              {/* Active Visitors Inside Flat Table/List */}
-              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Currently Inside Apartment
-                    </CardTitle>
-                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      Visitors currently marked active inside Tower A - Flat 304
-                    </CardDescription>
-                  </div>
-                  <Link href="/user/visitors" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
-                    Full Registry &rarr;
-                  </Link>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3">
-                  {insideVisitors.length > 0 ? (
-                    insideVisitors.map((v) => (
-                      <div
-                        key={v.visitorId}
-                        className="flex items-center justify-between p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{v.name}</span>
-                            <Badge variant="outline" className="text-xs border-emerald-300 text-emerald-700 dark:text-emerald-400 font-semibold">
-                              {v.purpose}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-4 text-xs text-zinc-600 dark:text-zinc-400 font-medium">
-                            <span>Phone: {v.number}</span>
-                            {v.vehicleNo && <span>Vehicle: {v.vehicleNo}</span>}
-                            <span>Entered: {v.entryTime || "13:45"}</span>
-                          </div>
-                        </div>
-                        <Badge className="bg-emerald-600 text-white text-xs font-semibold px-2.5 py-1">
-                          Inside Flat
-                        </Badge>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="py-6 text-center text-xs text-zinc-500 font-medium">
-                      No visitors currently inside. New arrivals will show here once admitted.
-                    </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  <span className="flex items-center gap-1">
+                    <Phone className="h-3.5 w-3.5" /> {v.phone}
+                  </span>
+                  {v.vehicleNo && (
+                    <span className="flex items-center gap-1 font-mono">
+                      <Car className="h-3.5 w-3.5" /> {v.vehicleNo}
+                    </span>
                   )}
-                </CardContent>
-              </Card>
+                  <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400">
+                    <Clock className="h-3.5 w-3.5" /> Arrived {timeAgo(v.createdAt, now)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button size="sm" onClick={() => decide(v.visitorId, v.name, true)} className="h-8 bg-emerald-600 text-xs text-white hover:bg-emerald-700">
+                  <Check className="mr-1 h-4 w-4" /> Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => decide(v.visitorId, v.name, false)}
+                  className="h-8 border-red-200 text-xs text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:hover:bg-red-950/30"
+                >
+                  <X className="mr-1 h-4 w-4" /> Decline
+                </Button>
+              </div>
             </div>
+          ))}
+        </section>
+      )}
 
-            {/* Right Rail Column (5 Columns) */}
-            <div className="lg:col-span-5 space-y-6">
-              {/* Active Gate Passes Box */}
-              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Active Gate Passes
-                    </CardTitle>
-                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      Valid passes for upcoming arrivals today
-                    </CardDescription>
-                  </div>
-                  <Link
-                    href="/user/gatepass"
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> New Pass
-                  </Link>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3.5">
-                  {gatePasses.map((p) => (
-                    <div
-                      key={p.passId}
-                      className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{p.guestName}</span>
-                        <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 text-xs font-semibold px-2 py-0.5">
-                          Valid 4h
-                        </Badge>
-                      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Maintenance due"
+          value={due > 0 ? inr(due) : "All paid"}
+          hint={
+            nextDue
+              ? new Date(nextDue.dueDate).getTime() < now
+                ? `Overdue since ${new Date(nextDue.dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
+                : `Due ${relativeDay(nextDue.dueDate, now).toLowerCase()}`
+              : "No pending invoices"
+          }
+          icon={Receipt}
+          tone={due > 0 ? "warning" : "success"}
+        >
+          <Link href="/user/maintenance" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+            {due > 0 ? "Pay now" : "View receipts"} <ArrowRight className="h-3 w-3" />
+          </Link>
+        </StatCard>
+        <StatCard label="Active gate passes" value={activePasses.length} hint="Valid PINs for expected guests" icon={QrCode}>
+          <Link href="/user/gatepass" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+            Issue a pass <ArrowRight className="h-3 w-3" />
+          </Link>
+        </StatCard>
+        <StatCard
+          label="Visitors inside"
+          value={inside.length}
+          hint={inside[0] ? visitorLabel(inside[0]) : "Nobody right now"}
+          icon={UserCheck}
+          tone={inside.length ? "success" : "default"}
+        >
+          <Link href="/user/visitors" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+            Visitor log <ArrowRight className="h-3 w-3" />
+          </Link>
+        </StatCard>
+        <StatCard label="Good Neighbour points" value={points} hint={lvl.level.name} icon={Trophy}>
+          <Progress value={lvl.progress * 100} className="mt-3 h-1.5" aria-label="Progress to next level" />
+          <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+            {lvl.next ? `${lvl.toNext} pts to ${lvl.next.name}` : "Top level reached"}
+          </p>
+        </StatCard>
+      </div>
 
-                      <div className="flex items-center justify-between pt-1">
-                        <div>
-                          <p className="text-xs text-zinc-500 font-medium">Entry PIN</p>
-                          <p className="text-lg font-mono font-bold tracking-widest text-zinc-900 dark:text-zinc-100">
-                            {p.pin}
-                          </p>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => copyPin(p.pin)}
-                          className="text-xs h-8 font-semibold text-zinc-700 dark:text-zinc-300 border-slate-300 dark:border-zinc-700"
-                        >
-                          <Copy className="w-3.5 h-3.5 mr-1" />
-                          Copy PIN
-                        </Button>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 pt-1 border-t border-slate-200 dark:border-zinc-800 font-medium">
-                        <span>{p.entryType}</span>
-                        {p.vehicleNumber && <span>Vehicle: {p.vehicleNumber}</span>}
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              {/* Society Announcements & Noticeboard */}
-              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Society Announcements
-                    </CardTitle>
-                    <CardDescription className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      Official notices posted by RWA Committee
-                    </CardDescription>
-                  </div>
-                  <Link href="/user/events" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
-                    View All &rarr;
-                  </Link>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3.5">
-                  <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Annual General Body Meeting (AGM)</span>
-                      <Badge className="bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-300 border-none text-xs font-semibold">
-                        Upcoming
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-zinc-600 dark:text-zinc-300 font-medium leading-relaxed">
-                      Clubhouse Main Hall and Online Jitsi stream. Saturday at 10:00 AM.
-                    </p>
-                    <p className="text-xs text-zinc-400 font-medium pt-1">Agenda: Annual financial audit &amp; security upgrades.</p>
-                  </div>
-
-                  <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Overhead Water Tank Deep Cleaning</span>
-                      <Badge variant="outline" className="text-zinc-600 dark:text-zinc-400 text-xs font-semibold">
-                        Maintenance
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-zinc-600 dark:text-zinc-300 font-medium leading-relaxed">
-                      Scheduled supply shutdown 1:00 PM to 4:00 PM this Thursday for Tower A and Tower B.
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Verified Service Partners Snapshot */}
-              <Card className="border-slate-200 dark:border-zinc-800 shadow-sm">
-                <CardHeader className="p-5 pb-3 border-b border-slate-100 dark:border-zinc-800 flex flex-row items-center justify-between">
-                  <CardTitle className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                    Verified Service Partners
-                  </CardTitle>
-                  <Link href="/user/bookings" className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
-                    Book &rarr;
-                  </Link>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                        <Wrench className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Raju Sharma (QuickPlumb)</p>
-                        <p className="text-xs text-zinc-500 font-medium">Society Plumber &bull; 4.9 Rating</p>
-                      </div>
-                    </div>
-                    <Link
-                      href="/plumber"
-                      className="text-xs font-semibold text-blue-600 hover:underline px-2 py-1"
-                    >
-                      View &rarr;
-                    </Link>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-teal-100 dark:bg-teal-950 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">FreshPress Laundry Care</p>
-                        <p className="text-xs text-zinc-500 font-medium">Express Wash &bull; 4.8 Rating</p>
-                      </div>
-                    </div>
-                    <Link
-                      href="/laundry"
-                      className="text-xs font-semibold text-teal-600 hover:underline px-2 py-1"
-                    >
-                      View &rarr;
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+        <div className="space-y-6 lg:col-span-7">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {QUICK_ACTIONS.map((a) => (
+              <Link
+                key={a.href}
+                href={a.href}
+                className="group rounded-lg border border-zinc-200 bg-white p-3.5 transition-colors hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600"
+              >
+                <a.icon className={`h-5 w-5 ${a.danger ? "text-red-600 dark:text-red-400" : "text-zinc-700 dark:text-zinc-300"}`} />
+                <p className="mt-2.5 text-sm font-medium">{a.label}</p>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{a.hint}</p>
+              </Link>
+            ))}
           </div>
+
+          <Panel
+            title="Currently inside your flat"
+            description={`Admitted visitors for ${resident.block}-${resident.flat}`}
+            action={<Link href="/user/visitors" className="font-medium text-zinc-600 hover:underline dark:text-zinc-300">Full log</Link>}
+            bodyClassName="p-0"
+          >
+            {inside.length === 0 ? (
+              <p className="px-4 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                No visitors inside. New arrivals appear here once you approve them.
+              </p>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {inside.map((v) => (
+                  <li key={v.visitorId} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{visitorLabel(v)}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {v.purpose} · entered {clock(v.entryAt)}
+                        {v.vehicleNo ? ` · ${v.vehicleNo}` : ""}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 shrink-0 text-xs"
+                      onClick={async () => {
+                        await visitorsData.checkout(v.visitorId);
+                        toast.success(`${v.name} checked out`);
+                      }}
+                    >
+                      <LogOut className="mr-1 h-3.5 w-3.5" /> Check out
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+
+          <Panel
+            title="Your service requests"
+            action={<Link href="/user/bookings" className="font-medium text-zinc-600 hover:underline dark:text-zinc-300">Book a service</Link>}
+            bodyClassName="p-0"
+          >
+            {myBookings.length === 0 ? (
+              <p className="px-4 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400">No open requests.</p>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {myBookings.map((b) => (
+                  <li key={b.bookingId} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{b.title}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {b.providerName} · {friendlyDateTime(b.scheduledFor)}
+                      </p>
+                    </div>
+                    <BookingStatusPill status={b.status} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
         </div>
-      </main>
-    </div>
+
+        <div className="space-y-6 lg:col-span-5">
+          <Panel
+            title="Active gate passes"
+            action={
+              <Link href="/user/gatepass" className="inline-flex items-center gap-1 font-medium text-zinc-600 hover:underline dark:text-zinc-300">
+                <Plus className="h-3.5 w-3.5" /> New
+              </Link>
+            }
+          >
+            {activePasses.length === 0 ? (
+              <EmptyState icon={QrCode} title="No active passes" description="Expecting someone? Issue a PIN so the guard can let them straight in." className="border-0 py-4" />
+            ) : (
+              <div className="space-y-2.5">
+                {activePasses.slice(0, 3).map((p) => (
+                  <div key={p.passId} className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/40">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{p.guestName}</p>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {p.entryType} · {countdown(p.expiresAt, now)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyPin(p.pin)}
+                      title="Copy PIN"
+                      className="flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 font-mono text-sm font-bold tracking-widest transition-colors hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
+                    >
+                      {p.pin}
+                      <Copy className="h-3 w-3 text-zinc-400" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Coming up" action={<Link href="/user/events" className="font-medium text-zinc-600 hover:underline dark:text-zinc-300">All events</Link>} bodyClassName="p-0">
+            {upcoming.length === 0 ? (
+              <p className="px-4 py-8 text-center text-xs text-zinc-500">Nothing scheduled.</p>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {upcoming.map((u) => (
+                  <li key={u.id}>
+                    <Link href={u.href} className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                        {u.kind === "Meeting" ? <Video className="h-4 w-4" /> : <CalendarDays className="h-4 w-4" />}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{u.title}</p>
+                        <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                          {friendlyDateTime(u.at)} · {u.where}
+                        </p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+
+          <Panel title="Recent activity" bodyClassName="p-0">
+            {activity.length === 0 ? (
+              <p className="px-4 py-8 text-center text-xs text-zinc-500">No recent activity.</p>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {activity.map((a) => (
+                  <li key={a.id} className="flex items-start gap-3 px-4 py-2.5">
+                    <BellRing className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                    <p className="min-w-0 flex-1 text-xs text-zinc-700 dark:text-zinc-300">{a.text}</p>
+                    <span className="shrink-0 text-[11px] text-zinc-400">{timeAgo(a.at, now)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </div>
+      </div>
+    </>
   );
 }

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { SignJWT } from 'jose'
 import crypto from 'crypto'
 
 export async function POST(request: Request) {
